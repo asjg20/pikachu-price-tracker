@@ -1,0 +1,40 @@
+name: Weekly Pikachu Price Movers Report
+
+on:
+  schedule:
+    # Every Monday at 13:00 UTC. Cron is always UTC on GitHub Actions.
+    - cron: "0 13 * * 1"
+  workflow_dispatch: {}  # adds a "Run workflow" button in the Actions tab
+
+permissions:
+  contents: write  # needed to commit the regenerated docs/index.html back
+
+jobs:
+  generate-and-email:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate report and send email
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          REPORT_RECIPIENT: ${{ secrets.REPORT_RECIPIENT }}
+        run: python generate_report.py
+
+      - name: Commit updated report if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html
+          git diff --cached --quiet || git commit -m "Update Pikachu movers report"
+          git push
