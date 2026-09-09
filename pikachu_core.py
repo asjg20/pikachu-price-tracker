@@ -224,7 +224,7 @@ def get_top_movers(n=10):
 def render_html_report(movers):
     """Render an HTML table report for a list of mover dicts (as returned by
     get_top_movers). Self-contained (inline CSS, no external assets) so it
-    can be used directly as an email body or written to docs/index.html.
+    can be written directly to docs/index.html for GitHub Pages.
     """
     from datetime import datetime, timezone
 

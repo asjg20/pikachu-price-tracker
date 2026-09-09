@@ -10,7 +10,7 @@ permissions:
   contents: write  # needed to commit the regenerated docs/index.html back
 
 jobs:
-  generate-and-email:
+  generate-report:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -24,11 +24,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Generate report and send email
-        env:
-          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          REPORT_RECIPIENT: ${{ secrets.REPORT_RECIPIENT }}
+      - name: Generate report
         run: python generate_report.py
 
       - name: Commit updated report if changed
