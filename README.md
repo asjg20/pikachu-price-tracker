@@ -115,9 +115,10 @@ Writes `docs/index.html`.
 ### 1. Enable GitHub Pages
 
 **Settings → Pages** → under "Build and deployment", set **Source** to
-"Deploy from a branch", **Branch** to `main` / `/docs`. After the first
-workflow run (or after you push the locally-generated `docs/index.html`),
-your report will be live at `https://<username>.github.io/<repo>/`.
+"Deploy from a branch", **Branch** to your repo's default branch (`master`
+unless you've renamed it) / `/docs`. After the first workflow run (or after
+you push the locally-generated `docs/index.html`), your report will be live
+at `https://<username>.github.io/<repo>/`.
 
 ### 2. Run it
 
