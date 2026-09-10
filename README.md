@@ -124,11 +124,33 @@ shows what the data genuinely supports instead:
   treated as 0% — the number of skips is logged on every run so it's
   visible rather than silent (a typical run skips ~50 of ~207 Pikachu cards,
   mostly promos with no Cardmarket listings).
-- Card art comes from TCGdex's image CDN. A few cards (mostly older promos,
-  e.g. Special Delivery Pikachu) have no artwork on file upstream; those
-  rows show a placeholder rather than a broken image. Roughly 5% of cards
-  serve `/high.png` but **not** `/high.webp`, and a `<picture>` fallback does
-  not cover a 404 — so `_resolve_image_url` HEAD-checks WebP once per
+- **Cardmarket's feed carries no condition or grade information at all** —
+  every `avg`/`avg1`/`avg7`/`avg30` field is a blend across whatever
+  condition sold, so these numbers cannot be assumed to be mint (or any
+  specific grade). This is also the likely cause of the next point: a single
+  high-value sale — plausibly a graded slab mixed into an otherwise raw-card
+  average — can dominate a low-volume card's short window.
+- **Some cards' Cardmarket data is simply wrong**, verified against outside
+  trackers rather than assumed. Pokémon Rumble Pikachu (`ru1-7`) showed an
+  `avg7` of €1,869.99 against a TCGplayer market price around $750 and Troll
+  & Toad retail of $169.99; Special Delivery Pikachu (`swshp-SWSH074`) showed
+  €1,511.93 against independent trackers' $250–455 range — and against its
+  *own* holo Cardmarket track (€377.32), which roughly agrees with them. Both
+  are excluded by id via `KNOWN_BAD_CARDS` in `pikachu_core.py`.
+
+  This is a **curated list, not a filter**, because no statistical shortcut
+  works here: the ratio between a card's avg1/avg7/avg30 was tested as a
+  general "this data looks wrong" signal and rejected — across the full
+  ~150-card set it forms one smooth continuum with no gap between the two
+  confirmed-bad cards and cards with no evidence of a problem (a verified-bad
+  card sat at 2.25x while an unremarkable neighbor sat at 2.21x). So the list
+  only ever grows by someone actually checking a number against an outside
+  source — it won't auto-catch a new bad card next week, and that's a real
+  tradeoff, not an oversight.
+- Card art comes from TCGdex's image CDN. A few cards have no artwork on file
+  upstream; those rows show a placeholder rather than a broken image. Roughly
+  5% of cards serve `/high.png` but **not** `/high.webp`, and a `<picture>`
+  fallback does not cover a 404 — so `_resolve_image_url` HEAD-checks WebP once per
   displayed card (cached) and falls back to PNG, rather than shipping broken
   images for that 5%.
 - The page backdrop is the Generations RC29/RC32 full-art Pikachu, blurred and
@@ -145,7 +167,7 @@ shows what the data genuinely supports instead:
 | File | Purpose |
 |---|---|
 | `pikachu_core.py` | All shared logic: fetching, ranking, HTML rendering. No dependency beyond `requests`. |
-| `test_pikachu_core.py` | 43 unit tests (`unittest` + mocked `requests.get` — no real network calls). |
+| `test_pikachu_core.py` | 48 unit tests (`unittest` + mocked `requests.get` — no real network calls). |
 | `Pikachu_Movers.ipynb` | Manual notebook: styled DataFrame + bar chart. |
 | `generate_report.py` | Automation entry point: fetch → write `docs/index.html`. |
 | `.github/workflows/weekly-report.yml` | Runs `generate_report.py` weekly and on-demand. |
@@ -168,7 +190,7 @@ pip install -r requirements.txt
 python -m unittest test_pikachu_core.py -v
 ```
 
-All 43 tests mock `requests.get` — no network access needed, and none of the
+All 48 tests mock `requests.get` — no network access needed, and none of the
 real API's rate limits are touched.
 
 ## Running the report generator locally

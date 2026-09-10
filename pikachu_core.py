@@ -36,6 +36,18 @@ Ranking methodology (see README.md for the full rationale):
     EUR (Cardmarket) even though the display reference price is in USD
     (TCGplayer) -- both are stated plainly in the README as known
     limitations, not hidden.
+  - Some cards' Cardmarket feed is simply wrong -- e.g. an avg7 several times
+    what TCGplayer and independent trackers show for the same card, likely a
+    single outlier sale (possibly a graded slab; Cardmarket carries no
+    condition/grade field) dominating a thin week of trades. There is no
+    reliable way to detect this generally: the ratio between a card's avg1,
+    avg7 and avg30 was tried as a bad-data signal and rejected -- across the
+    full card set it forms one smooth continuum with no gap between
+    confirmed-bad cards and legitimate large moves (a verified-bad card can
+    sit at 2.25x while a card with no evidence of a problem sits at 2.21x).
+    Known-bad cards are excluded by id via KNOWN_BAD_CARDS, each entry
+    documented with the evidence that got it added -- a small, honest,
+    manually-curated list rather than a heuristic that doesn't actually work.
 """
 
 import html
@@ -84,6 +96,37 @@ TCGPLAYER_VARIANT_PRIORITY = [
     "1st-edition",
     "unlimited",
 ]
+
+# Cards whose Cardmarket pricing (via TCGdex) has been checked against outside
+# trackers and found unreliable -- not "this card is volatile," but "this
+# specific number does not hold up against reality." Excluded before any
+# other logic runs.
+#
+# There is no statistical shortcut for this list: the ratio between a card's
+# 1-day, 7-day and 30-day averages was tested as a general "unreliable data"
+# detector and rejected -- across the full card set it forms one smooth
+# continuum with no gap between confirmed-bad cards and legitimate large
+# moves. Cards below were flagged by hand, cross-checked against independent
+# trackers, and belong here only because someone actually looked.
+#
+# To add one: verify the number against TCGplayer, PokeScope, or another
+# independent tracker first -- a big move alone is not evidence of bad data.
+KNOWN_BAD_CARDS = {
+    "ru1-7": (
+        "Pokemon Rumble Pikachu -- avg7 EUR1,869.99 vs TCGplayer market price "
+        "~$750 (~EUR700) and Troll & Toad retail $169.99. avg1 spikes to "
+        "EUR4,100 in a single day, consistent with one outlier sale (possibly "
+        "a graded slab -- Cardmarket's feed carries no condition/grade field) "
+        "dominating a thin week of trades."
+    ),
+    "swshp-SWSH074": (
+        "Special Delivery Pikachu -- avg7 EUR1,511.93 vs independent trackers "
+        "(PokeScope $454.55, CardRake $263.60) and even this card's OWN holo "
+        "Cardmarket track (avg7 EUR377.32, which roughly matches reality). "
+        "The non-holo track used throughout this report is the contaminated "
+        "one here specifically -- not a rule that generalizes to other cards."
+    ),
+}
 
 # Page backdrop: the Generations RC29/RC32 full-art Pikachu (Kagemaru Himeno).
 # Served as PNG because this card has no WebP variant on the TCGdex CDN.
@@ -176,9 +219,14 @@ def variant_label(name):
 def fetch_card_pricing(card_id):
     """Fetch one card's detail and compute its ranking/display fields.
 
-    Returns None (and logs why) if the card is unrankable: no cardmarket
-    pricing at all, missing avg7/avg30, or below the price floor.
+    Returns None (and logs why) if the card is unrankable: known-bad pricing
+    data, no cardmarket pricing at all, missing avg7/avg30, or below the
+    price floor.
     """
+    if card_id in KNOWN_BAD_CARDS:
+        logger.info("skipping %s: known bad Cardmarket data -- %s", card_id, KNOWN_BAD_CARDS[card_id])
+        return None
+
     data = _get_json(f"{BASE_URL}/cards/{card_id}")
 
     pricing = data.get("pricing") or {}

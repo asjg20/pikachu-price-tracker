@@ -54,6 +54,26 @@ class FetchAllPikachuCardIdsTests(unittest.TestCase):
         self.assertIn("name", mock_get.call_args.kwargs.get("params", {}))
 
 
+class KnownBadCardsTests(unittest.TestCase):
+    @patch("pikachu_core.requests.get")
+    def test_known_bad_card_is_excluded_without_a_network_call(self, mock_get):
+        # Checked before fetching -- a card we already know is bad shouldn't
+        # cost an API request to re-confirm.
+        bad_id = next(iter(pikachu_core.KNOWN_BAD_CARDS))
+        card = pikachu_core.fetch_card_pricing(bad_id)
+        self.assertIsNone(card)
+        mock_get.assert_not_called()
+
+    def test_every_entry_has_a_documented_reason(self):
+        # The whole point of this list is that each entry was actually
+        # checked against something -- an empty or placeholder reason
+        # defeats that.
+        for card_id, reason in pikachu_core.KNOWN_BAD_CARDS.items():
+            with self.subTest(card_id=card_id):
+                self.assertIsInstance(reason, str)
+                self.assertGreater(len(reason), 20)
+
+
 class FetchCardPricingTests(unittest.TestCase):
     def setUp(self):
         pikachu_core._set_release_date_cache.clear()
@@ -331,6 +351,25 @@ class GainersAndLosersTests(unittest.TestCase):
             return _response(details[url.rsplit("/", 1)[-1]])
 
         mock_get.side_effect = side_effect
+
+    @patch("pikachu_core.time.sleep", return_value=None)
+    @patch("pikachu_core.requests.get")
+    def test_known_bad_card_never_reaches_the_board(self, mock_get, mock_sleep):
+        # Even when it would otherwise be the clear #1 gainer, a card on the
+        # curated bad-data list must not appear in gainers, losers, or the
+        # sidebar stats -- fetch_card_pricing filters it out before ranking
+        # ever sees it.
+        bad_id = next(iter(pikachu_core.KNOWN_BAD_CARDS))
+        self._wire(mock_get, [
+            (bad_id, "Bad Card", 1000, 1000, 10),  # would be +9900% -- clearly #1
+            ("fine", "Fine Card", 12, 12, 10),      # a modest, legitimate gainer
+        ])
+        data = pikachu_core.get_gainers_and_losers(n=5)
+
+        ids_shown = {c["id"] for c in data["gainers"] + data["losers"]}
+        self.assertNotIn(bad_id, ids_shown)
+        self.assertEqual(ids_shown, {"fine"})
+        self.assertEqual(data["stats"]["tracked"], 1)
 
     @patch("pikachu_core.time.sleep", return_value=None)
     @patch("pikachu_core.requests.get")
