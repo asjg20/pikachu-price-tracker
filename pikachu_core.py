@@ -5,7 +5,9 @@ Data source: TCGdex (https://api.tcgdex.net/v2) -- free, no API key required.
 
 Ranking methodology (see README.md for the full rationale):
   - TCGplayer's block in the API is a point-in-time snapshot with no built-in
-    history, so it is used only as a display-only USD reference price.
+    history, so it is used only as a display-only USD price. It is read from
+    the card's BASE printing (see TCGPLAYER_VARIANT_PRIORITY) to match the
+    Cardmarket track the ranking uses.
   - Cardmarket's avg1 / avg7 / avg30 fields ARE rolling trailing averages
     (in EUR), so they're used as a moving-average crossover, similar to how
     you'd compare short vs long moving averages for a stock:
@@ -30,8 +32,10 @@ Ranking methodology (see README.md for the full rationale):
     limitations, not hidden.
 """
 
+import html
 import logging
 import math
+import re
 import time
 from datetime import datetime, timezone
 
@@ -56,14 +60,19 @@ NEW_CARD_WINDOW_DAYS = 30
 _set_release_date_cache = {}
 
 # TCGplayer nests pricing under variant keys that vary per card (not every
-# card has every variant). Preferred order for picking a single display
-# price: holo-style variants first, then plain, then unlimited.
+# card has every variant). "normal" comes FIRST deliberately: we rank on
+# Cardmarket's base (non-holo) avg track, so the displayed price has to be
+# the base printing too, or the two disagree. Preferring a holo variant here
+# produced a real bug -- Legendary Collection Pikachu (lc-86) has a
+# reverse-holofoil block whose only listings are $4,999.99 outliers
+# (marketPrice $1,574.99) next to a normal printing at $6.38, and the report
+# showed $1,574.99 for a card TCGplayer lists at $6.38.
 TCGPLAYER_VARIANT_PRIORITY = [
-    "reverse-holofoil",
+    "normal",
     "holofoil",
+    "reverse-holofoil",
     "1st-edition-holofoil",
     "1st-edition",
-    "normal",
     "unlimited",
 ]
 
@@ -84,19 +93,36 @@ def fetch_all_pikachu_card_ids():
 
 
 def _pick_usd_display_price(tcgplayer):
-    """Pick a single display-only USD price from a tcgplayer pricing block."""
+    """Pick a single display USD price from a tcgplayer pricing block.
+
+    Returns (price, variant_key), or (None, None) if the card has no usable
+    TCGplayer price. The variant is returned too so the report can say which
+    printing the price refers to instead of showing a bare number.
+    """
     if not tcgplayer:
-        return None
+        return None, None
     for variant in TCGPLAYER_VARIANT_PRIORITY:
         block = tcgplayer.get(variant)
         if block and block.get("marketPrice") is not None:
-            return block["marketPrice"]
+            return block["marketPrice"], variant
     # Fall back to any other variant TCGdex might return that we didn't
     # anticipate, rather than silently reporting no price.
     for key, block in tcgplayer.items():
         if isinstance(block, dict) and block.get("marketPrice") is not None:
-            return block["marketPrice"]
-    return None
+            return block["marketPrice"], key
+    return None, None
+
+
+def variant_label(name):
+    """Strip the redundant "Pikachu" from a card name, leaving what actually
+    distinguishes it ("Pikachu V-UNION" -> "V-UNION", "Ash's Pikachu" ->
+    "Ash's", plain "Pikachu" -> ""). Every card in this report is a Pikachu,
+    so repeating the word in every row carries no information.
+    """
+    if not name:
+        return ""
+    remainder = re.sub(r"pikachu", " ", name, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", remainder).strip(" -–—")
 
 
 def fetch_card_pricing(card_id):
@@ -130,16 +156,24 @@ def fetch_card_pricing(card_id):
     pct_change_24h = (avg1 - avg30) / avg30 * 100 if avg1 is not None else None
 
     set_info = data.get("set") or {}
+    usd_price, usd_variant = _pick_usd_display_price(pricing.get("tcgplayer"))
+
+    # TCGdex returns a base image URL with no extension; a quality + format
+    # suffix is required. Some cards (mostly old promos) have no image.
+    image_base = data.get("image")
 
     return {
         "id": card_id,
         "name": data.get("name"),
+        "variant_label": variant_label(data.get("name")),
         "set": set_info.get("name"),
         "set_id": set_info.get("id"),
         "local_id": data.get("localId"),
+        "image_url": f"{image_base}/high.webp" if image_base else None,
         "pct_change_month": pct_change_month,
         "pct_change_24h": pct_change_24h,
-        "usd_display_price": _pick_usd_display_price(pricing.get("tcgplayer")),
+        "usd_display_price": usd_price,
+        "usd_price_variant": usd_variant,
         "avg30_eur": avg30,
         "avg7_eur": avg7,
     }
@@ -221,87 +255,307 @@ def get_top_movers(n=10):
     return top
 
 
-def render_html_report(movers):
-    """Render an HTML table report for a list of mover dicts (as returned by
-    get_top_movers). Self-contained (inline CSS, no external assets) so it
-    can be written directly to docs/index.html for GitHub Pages.
-    """
-    from datetime import datetime, timezone
+def _fmt_pct(value):
+    return f"{value:+.1f}%" if value is not None else "n/a"
 
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    rows_html = []
-    for rank, card in enumerate(movers, start=1):
-        is_gainer = card["pct_change_month"] >= 0
-        row_class = "gainer" if is_gainer else "dropper"
-        arrow = "▲" if is_gainer else "▼"
+def _fmt_usd(value):
+    return f"${value:,.2f}" if value is not None else "n/a"
 
-        pct_24h = card.get("pct_change_24h")
-        pct_24h_display = f"{pct_24h:+.1f}%" if pct_24h is not None else "n/a"
 
-        usd_price = card.get("usd_display_price")
-        usd_display = f"${usd_price:,.2f}" if usd_price is not None else "n/a"
+def _card_tile_html(rank, card, max_abs_pct):
+    """Render one mover as a card tile: image, set identity, move, price."""
+    is_gainer = card["pct_change_month"] >= 0
+    direction = "up" if is_gainer else "down"
+    arrow = "▲" if is_gainer else "▼"
 
-        set_name = card.get("set") or "Unknown set"
-        local_id = card.get("local_id") or ""
-        new_badge = '<span class="new-badge">NEW!</span>' if card.get("is_new") else ""
+    set_name = html.escape(card.get("set") or "Unknown set")
+    local_id = html.escape(str(card.get("local_id") or ""))
+    variant = html.escape(card.get("variant_label") or "")
+    variant_html = f'<span class="variant">{variant}</span>' if variant else ""
+    new_html = '<span class="badge-new">NEW!</span>' if card.get("is_new") else ""
+    number_html = f"#{local_id}" if local_id else ""
 
-        rows_html.append(
-            f"""
-            <tr class="{row_class}">
-              <td class="rank">{rank}</td>
-              <td class="name">{card.get('name', 'Unknown')} {new_badge}</td>
-              <td class="set">{set_name} {f'#{local_id}' if local_id else ''}</td>
-              <td class="pct-month">{arrow} {card['pct_change_month']:+.1f}%</td>
-              <td class="pct-24h">{pct_24h_display}</td>
-              <td class="usd">{usd_display}</td>
-            </tr>
-            """
+    image_url = card.get("image_url")
+    if image_url:
+        alt = html.escape(f"{card.get('name') or 'Pikachu card'} - {card.get('set') or ''}")
+        art = (
+            f'<img class="art" src="{html.escape(image_url)}" loading="lazy" alt="{alt}">'
         )
+    else:
+        # TCGdex genuinely has no artwork for some promos (e.g. swshp-SWSH074).
+        # Say so, rather than showing something that reads as a broken image.
+        art = (
+            '<div class="art art-missing">'
+            '<span class="art-missing-bolt" aria-hidden="true">⚡</span>'
+            '<span class="art-missing-label">No artwork<br>on file</span>'
+            "</div>"
+        )
+
+    # Diverging magnitude bar on a scale shared by every tile, so bar lengths
+    # are comparable across the grid. Grows right from centre for a gain,
+    # left for a drop.
+    width_pct = (abs(card["pct_change_month"]) / max_abs_pct * 50) if max_abs_pct else 0
+    side = "left:50%;" if is_gainer else "right:50%;"
+    bar_style = f"width:{width_pct:.2f}%;{side}"
+
+    price_variant = card.get("usd_price_variant")
+    price_note = (
+        f"{price_variant.replace('-', ' ')} printing" if price_variant
+        else "no TCGplayer listing"
+    )
+    tooltip = html.escape(
+        f"Cardmarket 30-day avg EUR {card['avg30_eur']:.2f} -> 7-day avg EUR {card['avg7_eur']:.2f}"
+        f" | price shown is the {price_note}"
+    )
+
+    return f"""
+      <article class="tile {direction}" title="{tooltip}">
+        <div class="tile-rank">{rank}</div>
+        <div class="art-frame">{art}</div>
+        <div class="tile-body">
+          <div class="identity">
+            <h2 class="set">{set_name}</h2>
+            <div class="meta">{number_html} {variant_html} {new_html}</div>
+          </div>
+          <div class="move">
+            <span class="pct">{arrow} {card['pct_change_month']:+.1f}%</span>
+            <span class="window">30-day move</span>
+          </div>
+          <div class="bar-track" role="presentation">
+            <span class="bar-zero"></span>
+            <span class="bar-fill" style="{bar_style}"></span>
+          </div>
+          <dl class="stats">
+            <div><dt>Price</dt><dd class="price">{_fmt_usd(card.get('usd_display_price'))}</dd></div>
+            <div><dt>Last 24h</dt><dd class="pct24">{_fmt_pct(card.get('pct_change_24h'))}</dd></div>
+          </dl>
+        </div>
+      </article>
+"""
+
+
+def render_html_report(movers):
+    """Render the Pikachu card price report as a self-contained HTML page
+    (inline CSS, no external assets beyond the card art) suitable for writing
+    straight to docs/index.html for GitHub Pages.
+    """
+    generated_at = datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC")
+
+    max_abs_pct = max((abs(c["pct_change_month"]) for c in movers), default=0)
+    gainers = [c for c in movers if c["pct_change_month"] >= 0]
+    droppers = [c for c in movers if c["pct_change_month"] < 0]
+    top_gain = max((c["pct_change_month"] for c in gainers), default=None)
+    top_drop = min((c["pct_change_month"] for c in droppers), default=None)
+
+    tiles = "".join(
+        _card_tile_html(rank, card, max_abs_pct)
+        for rank, card in enumerate(movers, start=1)
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Pikachu Monthly Price Movers</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pikachu Card Prices</title>
 <style>
-  body {{ font-family: -apple-system, Segoe UI, Arial, sans-serif; background: #f7f7f9; color: #222; margin: 0; padding: 24px; }}
-  .container {{ max-width: 820px; margin: 0 auto; background: #fff; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-  h1 {{ font-size: 20px; margin: 0 0 4px; }}
-  .subtitle {{ color: #666; font-size: 13px; margin: 0 0 20px; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
-  th {{ text-align: left; padding: 8px 10px; border-bottom: 2px solid #ddd; color: #555; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }}
-  td {{ padding: 10px; border-bottom: 1px solid #eee; }}
-  tr.gainer .pct-month {{ color: #1a7f37; font-weight: 600; }}
-  tr.dropper .pct-month {{ color: #cf222e; font-weight: 600; }}
-  td.pct-24h {{ color: #888; }}
-  td.rank {{ color: #999; font-variant-numeric: tabular-nums; }}
-  td.usd {{ font-variant-numeric: tabular-nums; }}
-  .new-badge {{ display: inline-block; background: #0969da; color: #fff; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; padding: 2px 6px; border-radius: 10px; vertical-align: middle; }}
-  .caveat {{ margin-top: 20px; font-size: 12px; color: #888; line-height: 1.5; }}
+  :root {{
+    color-scheme: light;
+    --plane: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --hairline: rgba(11,11,11,0.10);
+    --up: #006300;
+    --up-mark: #0ca30c;
+    --down: #d03b3b;
+    --down-mark: #d03b3b;
+    --accent: #f6c945;
+    --accent-ink: #3a2f00;
+    --shadow: 0 1px 2px rgba(11,11,11,0.06), 0 8px 24px rgba(11,11,11,0.06);
+    --hover-shadow: 0 6px 12px rgba(11,11,11,0.10), 0 18px 40px rgba(11,11,11,0.10);
+    --chip: rgba(137,135,129,0.16);
+  }}
+  @media (prefers-color-scheme: dark) {{
+    :root:not([data-theme="light"]) {{
+      color-scheme: dark;
+      --plane: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --hairline: rgba(255,255,255,0.10);
+      --up: #0ca30c;
+      --up-mark: #0ca30c;
+      --down: #e66767;
+      --down-mark: #d03b3b;
+      --shadow: 0 1px 2px rgba(0,0,0,0.40), 0 8px 24px rgba(0,0,0,0.35);
+      --hover-shadow: 0 6px 12px rgba(0,0,0,0.45), 0 18px 40px rgba(0,0,0,0.40);
+      --chip: rgba(195,194,183,0.14);
+    }}
+  }}
+
+  * {{ box-sizing: border-box; }}
+  body {{
+    margin: 0;
+    background: var(--plane);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.45;
+  }}
+  .wrap {{ max-width: 1100px; margin: 0 auto; padding: 40px 20px 64px; }}
+
+  /* ---- header ---- */
+  .hero {{
+    display: flex; flex-wrap: wrap; gap: 20px;
+    align-items: flex-end; justify-content: space-between;
+    padding-bottom: 24px; margin-bottom: 28px;
+    border-bottom: 1px solid var(--hairline);
+  }}
+  .title-block h1 {{
+    margin: 0; font-size: clamp(28px, 5vw, 42px); letter-spacing: -0.02em; line-height: 1.1;
+  }}
+  .spark {{
+    display: inline-block; background: var(--accent); color: var(--accent-ink);
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 4px 9px; border-radius: 999px; margin-bottom: 10px;
+  }}
+  .title-block p {{ margin: 8px 0 0; color: var(--ink-2); font-size: 14px; max-width: 46ch; }}
+  .stamp {{ color: var(--muted); font-size: 12px; }}
+
+  .summary {{ display: flex; gap: 10px; flex-wrap: wrap; margin: 0; }}
+  .stat {{
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 10px 14px; min-width: 104px; box-shadow: var(--shadow);
+  }}
+  .stat dt {{ font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 2px; }}
+  .stat dd {{ margin: 0; font-size: 19px; font-weight: 650; }}
+  .stat dd.up {{ color: var(--up); }}
+  .stat dd.down {{ color: var(--down); }}
+
+  /* ---- grid ---- */
+  .grid {{
+    display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  }}
+  .tile {{
+    position: relative; display: flex; flex-direction: column;
+    background: var(--surface); border: 1px solid var(--hairline);
+    border-radius: 14px; overflow: hidden; box-shadow: var(--shadow);
+    transition: transform .15s ease, box-shadow .15s ease;
+  }}
+  .tile:hover {{ transform: translateY(-3px); box-shadow: var(--hover-shadow); }}
+  @media (prefers-reduced-motion: reduce) {{
+    .tile {{ transition: none; }}
+    .tile:hover {{ transform: none; }}
+  }}
+  .tile-rank {{
+    position: absolute; top: 10px; left: 10px; z-index: 2;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: var(--ink); color: var(--surface);
+    font-size: 13px; font-weight: 700;
+    display: grid; place-items: center;
+    font-variant-numeric: tabular-nums;
+  }}
+  .art-frame {{
+    padding: 18px 18px 6px; display: grid; place-items: center;
+    background: linear-gradient(160deg, rgba(246,201,69,0.16), transparent 62%);
+  }}
+  .art {{
+    width: 100%; max-width: 168px; border-radius: 8px; display: block;
+    aspect-ratio: 245/342; object-fit: contain;
+  }}
+  .art-missing {{
+    width: 100%; max-width: 168px; aspect-ratio: 245/342; border-radius: 8px;
+    border: 1px dashed var(--hairline); color: var(--muted);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    background: var(--chip); text-align: center;
+  }}
+  .art-missing-bolt {{ font-size: 26px; opacity: .5; }}
+  .art-missing-label {{ font-size: 11px; line-height: 1.3; }}
+  .tile-body {{ padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 10px; flex: 1; }}
+
+  .set {{ margin: 0; font-size: 15px; font-weight: 620; letter-spacing: -0.01em; line-height: 1.25; }}
+  .meta {{
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 3px;
+    font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+  }}
+  .variant {{
+    background: var(--chip); color: var(--ink-2);
+    padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  }}
+  .badge-new {{
+    background: var(--accent); color: var(--accent-ink);
+    padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: 0.04em;
+  }}
+
+  .move {{ display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }}
+  .pct {{ font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }}
+  .window {{ font-size: 11px; color: var(--muted); }}
+  .tile.up .pct {{ color: var(--up); }}
+  .tile.down .pct {{ color: var(--down); }}
+
+  .bar-track {{ position: relative; height: 6px; background: var(--chip); border-radius: 999px; }}
+  .bar-zero {{ position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--hairline); }}
+  .bar-fill {{ position: absolute; top: 0; bottom: 0; border-radius: 999px; }}
+  .tile.up .bar-fill {{ background: var(--up-mark); }}
+  .tile.down .bar-fill {{ background: var(--down-mark); }}
+
+  .stats {{
+    display: flex; gap: 18px; margin: auto 0 0; padding-top: 10px;
+    border-top: 1px solid var(--hairline);
+  }}
+  .stats div {{ display: flex; flex-direction: column; }}
+  .stats dt {{ font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1px; }}
+  .stats dd {{ margin: 0; font-size: 15px; font-weight: 620; font-variant-numeric: tabular-nums; }}
+  .stats .pct24 {{ color: var(--ink-2); font-size: 13px; font-weight: 550; }}
+
+  /* ---- footer ---- */
+  .notes {{
+    margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--hairline);
+    color: var(--muted); font-size: 12.5px; line-height: 1.6; max-width: 78ch;
+  }}
+  .notes strong {{ color: var(--ink-2); }}
+  .notes p {{ margin: 0 0 8px; }}
+  .notes a {{ color: inherit; }}
 </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Pikachu Monthly Price Movers</h1>
-    <p class="subtitle">Top {len(movers)} Pikachu-named cards by monthly price move &middot; generated {generated_at}</p>
-    <table>
-      <thead>
-        <tr>
-          <th>#</th><th>Card</th><th>Set</th><th>Monthly move</th><th>Last 24h</th><th>USD ref. price</th>
-        </tr>
-      </thead>
-      <tbody>
-        {''.join(rows_html)}
-      </tbody>
-    </table>
-    <p class="caveat">
-      "Monthly move" = (Cardmarket 7-day avg &minus; 30-day avg) / 30-day avg, in EUR &mdash;
-      an approximation, not the price exactly 30 days ago. Ranked by log-ratio magnitude so
-      gainers and droppers are compared fairly; cards under &euro;{MIN_AVG30_EUR:.2f} (30-day avg) are excluded.
-      USD reference price is a live TCGplayer snapshot, shown for context only. A blue
-      "NEW!" badge marks cards whose set released within the last {NEW_CARD_WINDOW_DAYS} days.
-    </p>
+  <div class="wrap">
+    <header class="hero">
+      <div class="title-block">
+        <span class="spark">⚡ Top 10 movers</span>
+        <h1>Pikachu Card Prices</h1>
+        <p>The Pikachu cards that moved the most over the past month, ranked by the size of the move &mdash; gains and drops together.</p>
+      </div>
+      <div>
+        <dl class="summary">
+          <div class="stat"><dt>Biggest gain</dt><dd class="up">{_fmt_pct(top_gain)}</dd></div>
+          <div class="stat"><dt>Biggest drop</dt><dd class="down">{_fmt_pct(top_drop)}</dd></div>
+          <div class="stat"><dt>Gainers</dt><dd>{len(gainers)}<span style="font-size:13px;color:var(--muted)"> / {len(movers)}</span></dd></div>
+        </dl>
+        <p class="stamp" style="margin:10px 0 0">Updated {generated_at}</p>
+      </div>
+    </header>
+
+    <main class="grid">{tiles}</main>
+
+    <footer class="notes">
+      <p><strong>How the move is measured.</strong> Cardmarket publishes rolling trailing averages in EUR. The 30-day move is
+      (7-day average &minus; 30-day average) &divide; 30-day average &mdash; a moving-average crossover, not the price exactly
+      30 days ago. &ldquo;Last 24h&rdquo; is the same comparison against the 1-day average, which is a single day of sales and
+      much noisier.</p>
+      <p><strong>How the top 10 is chosen.</strong> By the size of the move on a log scale, so a halving and a doubling count
+      equally. A plain percentage ranking would be almost all gainers, because a drop can never exceed &minus;100% while a gain
+      has no ceiling. Cards averaging under &euro;1.00 are left out &mdash; a few cents of movement on a bulk common reads as a
+      triple-digit swing.</p>
+      <p><strong>Price</strong> is the TCGplayer market price in USD for the card&rsquo;s base printing, shown as a snapshot for
+      scale &mdash; the ranking is not based on it, and it is a different marketplace and currency from the EUR figures above.
+      Cards with no Cardmarket 7- or 30-day average are skipped rather than counted as flat. A <strong>NEW!</strong> badge marks
+      a set released in the last {NEW_CARD_WINDOW_DAYS} days. Data from <a href="https://tcgdex.dev/">TCGdex</a>.</p>
+    </footer>
   </div>
 </body>
 </html>

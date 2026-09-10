@@ -15,10 +15,19 @@ TCGdex returns pricing from two marketplaces, and they're used very differently:
 
 - **TCGplayer** (`pricing.tcgplayer`) is a point-in-time snapshot with no
   built-in history — no way to know what a card cost a month ago from this
-  block alone. It's used **only** as a display-only USD reference price
-  (preferring the holo-style variant a card has: `reverse-holofoil` >
-  `holofoil` > `1st-edition-holofoil` > `1st-edition` > `normal` >
-  `unlimited`).
+  block alone. It's used **only** as the displayed USD price, read from the
+  card's **base printing** (`normal` > `holofoil` > `reverse-holofoil` >
+  `1st-edition-holofoil` > `1st-edition` > `unlimited`).
+
+  **`normal` is first on purpose.** The ranking uses Cardmarket's base
+  (non-holo) average track, so the displayed price has to be the base
+  printing or the two describe different objects. Preferring a holo variant
+  caused a real bug: Legendary Collection Pikachu (`lc-86`) has a
+  `reverse-holofoil` block whose only listings are $4,999.99 outliers
+  (marketPrice $1,574.99) sitting next to a `normal` printing at $6.38 — the
+  report showed **$1,574.99** for a card TCGplayer lists at **$6.38**. Cards
+  that only exist as holo (most modern ones) still fall through to
+  `holofoil` and are unaffected.
 - **Cardmarket** (`pricing.cardmarket`) exposes `avg1` / `avg7` / `avg30` —
   rolling trailing averages in **EUR**. These *are* usable as a
   moving-average crossover, the same idea as comparing a short vs. long
@@ -50,25 +59,32 @@ TCGdex returns pricing from two marketplaces, and they're used very differently:
   movement produces a triple-digit percentage swing that isn't economically
   meaningful (e.g. a bulk common going from €0.24 to €1.40 reads as +483%).
 - **"NEW!" badge**: a card whose *set* released within the last 30 days
-  (`NEW_CARD_WINDOW_DAYS` in `pikachu_core.py`) gets a blue "NEW!" badge in
+  (`NEW_CARD_WINDOW_DAYS` in `pikachu_core.py`) gets a "NEW!" badge in
   the report and notebook. This is looked up lazily — only for whichever
   cards make the final top 10 — via `GET /v2/en/sets/{id}`, which returns a
   `releaseDate`; unlike the per-card pricing lookups, this uses only a
   handful of extra requests since many movers share the same set.
+- **Card identity**: every card in the report is a Pikachu, so repeating the
+  word in every row carries no information. The **set** is the headline
+  instead, with the card number beneath it and only the *distinguishing*
+  part of the name kept as a chip (`Ash's Pikachu` → `Ash's`,
+  `Pikachu V-UNION` → `V-UNION`, plain `Pikachu` → nothing).
 
 ### Known limitations (stated plainly, not hidden)
 
 - `avg7`/`avg30` are **rolling** trailing averages, not "the price exactly 7
   or 30 days ago" — this is an approximation of a monthly move, not an exact
   one.
-- The ranking metric is in **EUR** (Cardmarket), while the displayed
-  reference price is in **USD** (TCGplayer) — the two aren't on the same
-  currency or the same marketplace, and a card can be popular on one and
-  quiet on the other.
+- The ranking metric is in **EUR** (Cardmarket), while the displayed price is
+  in **USD** (TCGplayer) — the two aren't on the same currency or the same
+  marketplace, and a card can be popular on one and quiet on the other.
 - Cards missing `cardmarket.avg7` or `cardmarket.avg30` are skipped, not
   treated as 0% — the number of skips is logged on every run so it's
   visible rather than silent (a typical run skips ~50 of ~207 Pikachu cards,
   mostly promos with no Cardmarket listings).
+- Card art comes from TCGdex's image CDN. A few cards (mostly older promos,
+  e.g. Special Delivery Pikachu) have no artwork on file upstream; those
+  tiles show a labelled placeholder rather than a broken image.
 
 ## Files
 
