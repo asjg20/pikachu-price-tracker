@@ -538,7 +538,7 @@ class TransientFailureTests(unittest.TestCase):
 
         mock_get.side_effect = side_effect
 
-        cards = pikachu_core._add_new_badges([{"set_id": "ru1", "name": "Pikachu"}])
+        cards = pikachu_core._enrich_for_display([{"set_id": "ru1", "name": "Pikachu"}])
 
         self.assertIs(cards[0]["is_new"], False)
         self.assertIsNone(cards[0]["release_date"])

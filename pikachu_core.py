@@ -65,6 +65,9 @@ NEW_CARD_WINDOW_DAYS = 30
 # can share a set.
 _set_release_date_cache = {}
 
+# Card image URLs verified to exist (see _resolve_image_url), keyed by base URL.
+_image_url_cache = {}
+
 # TCGplayer nests pricing under variant keys that vary per card (not every
 # card has every variant). "normal" comes FIRST deliberately: we rank on
 # Cardmarket's base (non-holo) avg track, so the displayed price has to be
@@ -81,6 +84,10 @@ TCGPLAYER_VARIANT_PRIORITY = [
     "1st-edition",
     "unlimited",
 ]
+
+# Page backdrop: the Generations RC29/RC32 full-art Pikachu (Kagemaru Himeno).
+# Served as PNG because this card has no WebP variant on the TCGdex CDN.
+BACKDROP_IMAGE_URL = "https://assets.tcgdex.net/en/xy/g1/RC29/high.png"
 
 # TCGdex occasionally returns a transient 5xx. The weekly workflow runs
 # unattended, so a single blip must not take down the whole report.
@@ -198,7 +205,8 @@ def fetch_card_pricing(card_id):
     usd_price, usd_variant = _pick_usd_display_price(pricing.get("tcgplayer"))
 
     # TCGdex returns a base image URL with no extension; a quality + format
-    # suffix is required. Some cards (mostly old promos) have no image.
+    # suffix is required. Some cards (mostly old promos) have no image at all,
+    # and some have PNG but not WebP -- see _resolve_image_url.
     image_base = data.get("image")
 
     return {
@@ -208,7 +216,8 @@ def fetch_card_pricing(card_id):
         "set": set_info.get("name"),
         "set_id": set_info.get("id"),
         "local_id": data.get("localId"),
-        "image_url": f"{image_base}/high.webp" if image_base else None,
+        "image_base": image_base,
+        "image_url": None,  # filled in by _resolve_image_url for shown cards
         "pct_change_month": pct_change_month,
         "pct_change_24h": pct_change_24h,
         "change_eur": avg7 - avg30,
@@ -311,12 +320,39 @@ def _dedupe_by_product(cards):
     return passthrough + [card for _, card in best_by_product.values()]
 
 
-def _add_new_badges(cards):
-    """Look up each card's set release date and flag recent releases.
+def _resolve_image_url(image_base):
+    """Pick an image URL that actually exists for this card.
+
+    Most cards serve /high.webp, but a minority (~5%) only have /high.png --
+    requesting webp for those returns 404 and the browser shows a broken
+    image, since <picture> fallbacks only cover format support, not misses.
+    One HEAD request per *displayed* card settles it, and the answer is
+    cached. Falls back to PNG if the check itself fails.
+    """
+    if not image_base:
+        return None
+    if image_base in _image_url_cache:
+        return _image_url_cache[image_base]
+
+    webp = f"{image_base}/high.webp"
+    resolved = f"{image_base}/high.png"
+    try:
+        if requests.head(webp, timeout=15).status_code == 200:
+            resolved = webp
+    except requests.exceptions.RequestException as error:
+        logger.warning("image check failed for %s, using PNG: %s", image_base, error)
+
+    _image_url_cache[image_base] = resolved
+    return resolved
+
+
+def _enrich_for_display(cards):
+    """Fill in the extras only the displayed cards need: the "NEW!" badge and
+    a verified image URL.
 
     Done for a handful of selected cards rather than every rankable one --
-    that would roughly double the API calls for information only the
-    displayed rows ever use. Results are cached per set id.
+    that would multiply the API calls for information only the shown rows
+    ever use. Results are cached per set id / image.
     """
     for card in cards:
         set_id = card.get("set_id")
@@ -329,6 +365,7 @@ def _add_new_badges(cards):
                 logger.warning("could not read release date for set %s: %s", set_id, error)
         card["release_date"] = release_date
         card["is_new"] = _is_recently_released(release_date)
+        card["image_url"] = _resolve_image_url(card.get("image_base"))
         time.sleep(REQUEST_DELAY_SECONDS)
     return cards
 
@@ -343,7 +380,7 @@ def get_top_movers(n=10):
     """
     rankable, _ = fetch_all_rankable_cards()
     top = sorted(rankable, key=_rank_score, reverse=True)[:n]
-    return _add_new_badges(top)
+    return _enrich_for_display(top)
 
 
 def _wildest_24h_swing(rankable):
@@ -379,9 +416,17 @@ def get_gainers_and_losers(n=5):
     gainers = [c for c in by_move if c["pct_change_month"] > 0][:n]
     losers = [c for c in reversed(by_move) if c["pct_change_month"] < 0][:n]
 
-    _add_new_badges(gainers + losers)
-
     priciest = max(rankable, key=lambda c: c["avg7_eur"]) if rankable else None
+    wildest = _wildest_24h_swing(rankable)
+
+    # The sidebar features are shown too, so they need art and badges as much
+    # as the table rows do. De-duplicate by id -- the priciest card is often
+    # also a top gainer, and enriching it twice would just cost extra requests.
+    shown = list(gainers) + list(losers)
+    for card in (priciest, wildest["card"] if wildest else None):
+        if card is not None and not any(c is card for c in shown):
+            shown.append(card)
+    _enrich_for_display(shown)
 
     return {
         "gainers": gainers,
@@ -392,7 +437,7 @@ def get_gainers_and_losers(n=5):
             "gainer_count": sum(1 for c in rankable if c["pct_change_month"] > 0),
             "loser_count": sum(1 for c in rankable if c["pct_change_month"] < 0),
             "priciest": priciest,
-            "wildest_24h": _wildest_24h_swing(rankable),
+            "wildest_24h": wildest,
         },
     }
 
@@ -556,6 +601,9 @@ def render_html_report(data):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pikachu Card Prices</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {{
     color-scheme: light;
@@ -576,6 +624,15 @@ def render_html_report(data):
     --accent-ink: #3a2f00;
     --chip: rgba(137,135,129,0.16);
     --shadow: 0 1px 2px rgba(11,11,11,0.05), 0 6px 20px rgba(11,11,11,0.06);
+    /* Panels sit on the card-art backdrop, so they need to be near-opaque to
+       stay readable while still letting a little of it through. */
+    --panel: rgba(252,252,251,0.90);
+    --backdrop-opacity: 0.30;
+    --backdrop-veil: rgba(244,244,242,0.55);
+    /* Deeper amber on the light plane -- the bright yellow used in dark mode
+       is close to invisible on a near-white background. */
+    --title-grad: linear-gradient(96deg, #c98500 4%, #d2691a 52%, #c2410c 96%);
+    --title-shadow: none;
   }}
   @media (prefers-color-scheme: dark) {{
     :root:not([data-theme="light"]) {{
@@ -595,6 +652,11 @@ def render_html_report(data):
       --down-wash: rgba(208,59,59,0.18);
       --chip: rgba(195,194,183,0.14);
       --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 6px 20px rgba(0,0,0,0.35);
+      --panel: rgba(26,26,25,0.88);
+      --backdrop-opacity: 0.22;
+      --backdrop-veil: rgba(13,13,13,0.55);
+      --title-grad: linear-gradient(96deg, #f6c945 6%, #ffb020 46%, #ff8a3d 92%);
+      --title-shadow: drop-shadow(0 2px 5px rgba(0,0,0,0.35));
     }}
   }}
 
@@ -605,19 +667,48 @@ def render_html_report(data):
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
     font-size: 14px; line-height: 1.4;
   }}
+
+  /* Card art backdrop: fixed, blurred and dialled well back, with a veil on
+     top, so it reads as texture behind the data rather than competing with
+     it. Two layers instead of one so the blur can't wash out the veil. */
+  body::before, body::after {{
+    content: ""; position: fixed; inset: -40px; z-index: -2; pointer-events: none;
+  }}
+  body::before {{
+    background: url("{BACKDROP_IMAGE_URL}") center / cover no-repeat;
+    opacity: var(--backdrop-opacity);
+    filter: blur(3px) saturate(1.15);
+  }}
+  body::after {{ background: var(--backdrop-veil); z-index: -1; }}
   .wrap {{
     max-width: 1240px; min-height: 100%; margin: 0 auto;
     padding: 26px 24px 20px; display: flex; flex-direction: column; gap: 16px;
   }}
 
   /* ---------- header ---------- */
-  .head {{ display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }}
-  .head h1 {{ margin: 0; font-size: 27px; letter-spacing: -0.02em; }}
-  .head p {{ margin: 4px 0 0; color: var(--ink-2); font-size: 13px; max-width: 56ch; }}
-  .bolt {{ color: var(--accent); }}
+  .head {{ display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 28px; }}
+  .title-block {{ flex: 1 1 460px; min-width: 0; }}
+  .head h1 {{
+    margin: 0;
+    font-family: Fredoka, "Trebuchet MS", system-ui, sans-serif;
+    font-weight: 700; font-size: clamp(30px, 3.4vw, 44px);
+    letter-spacing: -0.015em; line-height: 1.05;
+    background: var(--title-grad);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    -webkit-text-fill-color: transparent;
+    filter: var(--title-shadow);
+  }}
+  /* The description runs the full width of the title block rather than
+     wrapping early in a narrow column. */
+  .head p {{ margin: 6px 0 0; color: var(--ink-2); font-size: 14.5px; max-width: none; }}
+  .bolt {{
+    -webkit-text-fill-color: initial; color: var(--accent);
+    filter: drop-shadow(0 2px 6px rgba(246,201,69,0.55));
+  }}
   .head-stats {{ display: flex; gap: 8px; align-items: stretch; }}
   .kpi {{
-    background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--hairline); border-radius: 10px;
+    backdrop-filter: blur(6px);
     padding: 8px 13px; min-width: 96px; box-shadow: var(--shadow);
   }}
   .kpi span {{ display: block; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }}
@@ -625,9 +716,10 @@ def render_html_report(data):
   .kpi.stamp b {{ font-size: 12.5px; font-weight: 560; color: var(--ink-2); }}
 
   /* ---------- layout ---------- */
-  .main {{ display: grid; grid-template-columns: minmax(0,1fr) 268px; gap: 16px; flex: 1; align-items: start; }}
+  .main {{ display: grid; grid-template-columns: minmax(0,1fr) 340px; gap: 16px; flex: 1; align-items: start; }}
   .board-card {{
-    background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
+    background: var(--panel); border: 1px solid var(--hairline); border-radius: 12px;
+    backdrop-filter: blur(6px);
     box-shadow: var(--shadow); overflow: hidden; height: 100%;
     display: flex; flex-direction: column;
   }}
@@ -644,8 +736,8 @@ def render_html_report(data):
   .panel-body {{ display: none; flex: 1; min-height: 0; }}
   #t-gain:checked ~ .tabs label[for="t-gain"],
   #t-lose:checked ~ .tabs label[for="t-lose"] {{
-    color: var(--ink); background: var(--surface);
-    border-color: var(--hairline); border-bottom: 1px solid var(--surface);
+    color: var(--ink); background: var(--panel);
+    border-color: var(--hairline); border-bottom: 1px solid transparent;
   }}
   #t-gain:checked ~ .body-gain, #t-lose:checked ~ .body-lose {{ display: block; }}
   .tabin:focus-visible ~ .tabs label[for="t-gain"],
@@ -697,19 +789,27 @@ def render_html_report(data):
   /* ---------- sidebar ---------- */
   .side {{ display: flex; flex-direction: column; gap: 12px; }}
   .panel {{
-    background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
-    padding: 13px 14px; box-shadow: var(--shadow);
+    background: var(--panel); border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 13px 14px; box-shadow: var(--shadow); backdrop-filter: blur(6px);
   }}
   .panel h2 {{ margin: 0 0 10px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }}
-  .panel-hero {{ padding: 15px 16px 14px; }}
-  .feature {{ display: flex; gap: 14px; align-items: center; }}
-  .feature .thumb {{ width: 78px; height: 109px; border-radius: 6px; }}
+  .panel-hero {{ padding: 16px 18px 15px; }}
+  .panel-hero h2 {{ font-size: 11.5px; margin-bottom: 12px; }}
+  .feature {{ display: flex; gap: 16px; align-items: center; }}
+  .feature .thumb {{
+    width: 112px; height: 156px; border-radius: 7px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.28);
+  }}
   .feature-text {{ display: flex; flex-direction: column; min-width: 0; }}
-  .feature-value {{ font-size: 30px; font-weight: 720; letter-spacing: -0.03em; line-height: 1.05; font-variant-numeric: tabular-nums; }}
+  .feature-value {{
+    font-family: Fredoka, "Trebuchet MS", system-ui, sans-serif;
+    font-size: 34px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.05;
+    font-variant-numeric: tabular-nums;
+  }}
   .feature-value.up {{ color: var(--up); }}
   .feature-value.down {{ color: var(--down); }}
-  .feature-name {{ font-size: 14px; font-weight: 640; margin-top: 4px; }}
-  .feature-sub {{ font-size: 12px; color: var(--muted); }}
+  .feature-name {{ font-size: 15px; font-weight: 650; margin-top: 6px; line-height: 1.25; }}
+  .feature-sub {{ font-size: 12.5px; color: var(--muted); margin-top: 2px; }}
   .panel-note {{ margin: 10px 0 0; font-size: 10.5px; line-height: 1.45; color: var(--muted); }}
 
   .pulse-bar {{ height: 7px; border-radius: 999px; background: var(--down-mark); overflow: hidden; }}

@@ -126,7 +126,14 @@ shows what the data genuinely supports instead:
   mostly promos with no Cardmarket listings).
 - Card art comes from TCGdex's image CDN. A few cards (mostly older promos,
   e.g. Special Delivery Pikachu) have no artwork on file upstream; those
-  rows show a placeholder rather than a broken image.
+  rows show a placeholder rather than a broken image. Roughly 5% of cards
+  serve `/high.png` but **not** `/high.webp`, and a `<picture>` fallback does
+  not cover a 404 — so `_resolve_image_url` HEAD-checks WebP once per
+  displayed card (cached) and falls back to PNG, rather than shipping broken
+  images for that 5%.
+- The page backdrop is the Generations RC29/RC32 full-art Pikachu, blurred and
+  held at low opacity behind a veil (`--backdrop-opacity`, `--backdrop-veil`),
+  with panels near-opaque on top so text stays readable.
 - TCGdex occasionally returns a transient 5xx. Since the workflow runs
   unattended, requests retry with backoff (`MAX_RETRIES`), and a failed
   set-release lookup degrades to "no NEW badge" instead of failing the run —
