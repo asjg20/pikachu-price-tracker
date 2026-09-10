@@ -179,6 +179,24 @@ class FetchCardPricingTests(unittest.TestCase):
         self.assertIsNone(card["usd_price_variant"])
 
 
+class CardmarketUrlTests(unittest.TestCase):
+    def test_builds_url_from_product_id(self):
+        url = pikachu_core._cardmarket_url({"cm_product_id": 88096})
+        self.assertEqual(url, "https://www.cardmarket.com/en/Pokemon/Products?idProduct=88096")
+
+    def test_missing_product_id_returns_none(self):
+        self.assertIsNone(pikachu_core._cardmarket_url({"cm_product_id": None}))
+        self.assertIsNone(pikachu_core._cardmarket_url({}))
+
+    @patch("pikachu_core.requests.get")
+    def test_fetch_card_pricing_captures_the_product_id(self, mock_get):
+        mock_get.return_value = _response(_card_detail(
+            cardmarket={"avg1": 10, "avg7": 10, "avg30": 10, "idProduct": 88096},
+        ))
+        card = pikachu_core.fetch_card_pricing("swsh4-44")
+        self.assertEqual(card["cm_product_id"], 88096)
+
+
 class VariantLabelTests(unittest.TestCase):
     def test_plain_pikachu_has_no_variant_label(self):
         self.assertEqual(pikachu_core.variant_label("Pikachu"), "")
@@ -434,6 +452,7 @@ class RenderHtmlReportTests(unittest.TestCase):
             "local_id": "1", "image_url": "https://assets.tcgdex.net/en/x/y/1/high.webp",
             "pct_change_month": 42.0, "pct_change_24h": 10.0, "change_eur": 4.2,
             "usd_display_price": 9.99, "usd_price_variant": "normal",
+            "cm_product_id": 12345,
             "avg1_eur": 15.0, "avg7_eur": 14.2, "avg30_eur": 10.0, "is_new": False,
         }
         card.update(overrides)
@@ -503,7 +522,11 @@ class RenderHtmlReportTests(unittest.TestCase):
 
     def test_set_is_the_headline(self):
         report = pikachu_core.render_html_report(self._data())
-        self.assertIn('class="card-set">Set A<', report)
+        # Set A links out (has cm_product_id), so its text sits inside the
+        # <a>; check the set name appears as the card-set cell's content
+        # rather than requiring a bare, unlinked span.
+        self.assertIn('class="card-set"><a class="set-link"', report)
+        self.assertIn(">Set A<", report)
         self.assertIn(">Ash&#x27;s<", report)
 
     def test_no_trendline_is_rendered(self):
@@ -538,6 +561,35 @@ class RenderHtmlReportTests(unittest.TestCase):
         })
         self.assertIn("Pikachu Card Prices", report)
         self.assertIn("No cards gained this period.", report)
+
+    def test_row_links_out_to_the_cards_cardmarket_page(self):
+        report = pikachu_core.render_html_report(self._data())
+        self.assertIn(
+            '<a class="set-link" href="https://www.cardmarket.com/en/Pokemon/Products?idProduct=12345"',
+            report,
+        )
+        self.assertIn('target="_blank"', report)
+        self.assertIn('rel="noopener noreferrer"', report)
+
+    def test_card_without_a_product_id_gets_no_link(self):
+        # Isolate to just this one card (no priciest/wildest fixtures, which
+        # default to a product id) so an unlinked set name is unambiguous.
+        data = {
+            "gainers": [self._card(cm_product_id=None)],
+            "losers": [],
+            "stats": {"tracked": 1, "skipped": 0, "gainer_count": 1,
+                      "loser_count": 0, "priciest": None, "wildest_24h": None},
+        }
+        report = pikachu_core.render_html_report(data)
+        self.assertNotIn("cardmarket.com", report)
+        self.assertIn('class="card-set">Set A<', report)  # bare, no <a>
+        self.assertIn("Pikachu Card Prices", report)
+
+    def test_sidebar_features_also_link_out(self):
+        report = pikachu_core.render_html_report(self._data())
+        # _data()'s gainer, loser, priciest and wildest-card fixtures all
+        # share product id 12345 (none override it) -> 4 links total.
+        self.assertEqual(report.count("idProduct=12345"), 4)
 
 
 class TransientFailureTests(unittest.TestCase):
