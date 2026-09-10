@@ -9,7 +9,7 @@ Run in CI:      invoked by .github/workflows/weekly-report.yml
 import logging
 from pathlib import Path
 
-from pikachu_core import get_top_movers, render_html_report
+from pikachu_core import get_gainers_and_losers, render_html_report
 
 DOCS_DIR = Path(__file__).parent / "docs"
 OUTPUT_FILE = DOCS_DIR / "index.html"
@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 
 def main():
     logger.info("fetching top Pikachu price movers...")
-    movers = get_top_movers(n=10)
+    data = get_gainers_and_losers(n=5)
 
-    html = render_html_report(movers)
+    html = render_html_report(data)
 
     DOCS_DIR.mkdir(exist_ok=True)
     OUTPUT_FILE.write_text(html, encoding="utf-8")

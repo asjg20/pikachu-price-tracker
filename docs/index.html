@@ -7,21 +7,23 @@
 <style>
   :root {
     color-scheme: light;
-    --plane: #f9f9f7;
+    --plane: #f4f4f2;
     --surface: #fcfcfb;
     --ink: #0b0b0b;
     --ink-2: #52514e;
     --muted: #898781;
     --hairline: rgba(11,11,11,0.10);
+    --row-hover: rgba(11,11,11,0.035);
     --up: #006300;
     --up-mark: #0ca30c;
-    --down: #d03b3b;
+    --up-wash: rgba(12,163,12,0.12);
+    --down: #c22a2a;
     --down-mark: #d03b3b;
+    --down-wash: rgba(208,59,59,0.12);
     --accent: #f6c945;
     --accent-ink: #3a2f00;
-    --shadow: 0 1px 2px rgba(11,11,11,0.06), 0 8px 24px rgba(11,11,11,0.06);
-    --hover-shadow: 0 6px 12px rgba(11,11,11,0.10), 0 18px 40px rgba(11,11,11,0.10);
     --chip: rgba(137,135,129,0.16);
+    --shadow: 0 1px 2px rgba(11,11,11,0.05), 0 6px 20px rgba(11,11,11,0.06);
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -32,404 +34,436 @@
       --ink-2: #c3c2b7;
       --muted: #898781;
       --hairline: rgba(255,255,255,0.10);
-      --up: #0ca30c;
+      --row-hover: rgba(255,255,255,0.045);
+      --up: #23c723;
       --up-mark: #0ca30c;
-      --down: #e66767;
+      --up-wash: rgba(12,163,12,0.16);
+      --down: #ef7676;
       --down-mark: #d03b3b;
-      --shadow: 0 1px 2px rgba(0,0,0,0.40), 0 8px 24px rgba(0,0,0,0.35);
-      --hover-shadow: 0 6px 12px rgba(0,0,0,0.45), 0 18px 40px rgba(0,0,0,0.40);
+      --down-wash: rgba(208,59,59,0.18);
       --chip: rgba(195,194,183,0.14);
+      --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 6px 20px rgba(0,0,0,0.35);
     }
   }
 
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    margin: 0;
-    background: var(--plane);
-    color: var(--ink);
+    margin: 0; background: var(--plane); color: var(--ink);
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    line-height: 1.45;
+    font-size: 14px; line-height: 1.4;
   }
-  .wrap { max-width: 1100px; margin: 0 auto; padding: 40px 20px 64px; }
+  .wrap {
+    max-width: 1240px; min-height: 100%; margin: 0 auto;
+    padding: 26px 24px 20px; display: flex; flex-direction: column; gap: 16px;
+  }
 
-  /* ---- header ---- */
-  .hero {
-    display: flex; flex-wrap: wrap; gap: 20px;
-    align-items: flex-end; justify-content: space-between;
-    padding-bottom: 24px; margin-bottom: 28px;
-    border-bottom: 1px solid var(--hairline);
+  /* ---------- header ---------- */
+  .head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }
+  .head h1 { margin: 0; font-size: 27px; letter-spacing: -0.02em; }
+  .head p { margin: 4px 0 0; color: var(--ink-2); font-size: 13px; max-width: 56ch; }
+  .bolt { color: var(--accent); }
+  .head-stats { display: flex; gap: 8px; align-items: stretch; }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px;
+    padding: 8px 13px; min-width: 96px; box-shadow: var(--shadow);
   }
-  .title-block h1 {
-    margin: 0; font-size: clamp(28px, 5vw, 42px); letter-spacing: -0.02em; line-height: 1.1;
-  }
-  .spark {
-    display: inline-block; background: var(--accent); color: var(--accent-ink);
-    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-    padding: 4px 9px; border-radius: 999px; margin-bottom: 10px;
-  }
-  .title-block p { margin: 8px 0 0; color: var(--ink-2); font-size: 14px; max-width: 46ch; }
-  .stamp { color: var(--muted); font-size: 12px; }
+  .kpi span { display: block; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+  .kpi b { font-size: 18px; font-weight: 680; font-variant-numeric: tabular-nums; }
+  .kpi.stamp b { font-size: 12.5px; font-weight: 560; color: var(--ink-2); }
 
-  .summary { display: flex; gap: 10px; flex-wrap: wrap; margin: 0; }
-  .stat {
+  /* ---------- layout ---------- */
+  .main { display: grid; grid-template-columns: minmax(0,1fr) 268px; gap: 16px; flex: 1; align-items: start; }
+  .board-card {
     background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
-    padding: 10px 14px; min-width: 104px; box-shadow: var(--shadow);
-  }
-  .stat dt { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 2px; }
-  .stat dd { margin: 0; font-size: 19px; font-weight: 650; }
-  .stat dd.up { color: var(--up); }
-  .stat dd.down { color: var(--down); }
-
-  /* ---- grid ---- */
-  .grid {
-    display: grid; gap: 16px;
-    grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
-  }
-  .tile {
-    position: relative; display: flex; flex-direction: column;
-    background: var(--surface); border: 1px solid var(--hairline);
-    border-radius: 14px; overflow: hidden; box-shadow: var(--shadow);
-    transition: transform .15s ease, box-shadow .15s ease;
-  }
-  .tile:hover { transform: translateY(-3px); box-shadow: var(--hover-shadow); }
-  @media (prefers-reduced-motion: reduce) {
-    .tile { transition: none; }
-    .tile:hover { transform: none; }
-  }
-  .tile-rank {
-    position: absolute; top: 10px; left: 10px; z-index: 2;
-    width: 26px; height: 26px; border-radius: 50%;
-    background: var(--ink); color: var(--surface);
-    font-size: 13px; font-weight: 700;
-    display: grid; place-items: center;
-    font-variant-numeric: tabular-nums;
-  }
-  .art-frame {
-    padding: 18px 18px 6px; display: grid; place-items: center;
-    background: linear-gradient(160deg, rgba(246,201,69,0.16), transparent 62%);
-  }
-  .art {
-    width: 100%; max-width: 168px; border-radius: 8px; display: block;
-    aspect-ratio: 245/342; object-fit: contain;
-  }
-  .art-missing {
-    width: 100%; max-width: 168px; aspect-ratio: 245/342; border-radius: 8px;
-    border: 1px dashed var(--hairline); color: var(--muted);
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
-    background: var(--chip); text-align: center;
-  }
-  .art-missing-bolt { font-size: 26px; opacity: .5; }
-  .art-missing-label { font-size: 11px; line-height: 1.3; }
-  .tile-body { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
-
-  .set { margin: 0; font-size: 15px; font-weight: 620; letter-spacing: -0.01em; line-height: 1.25; }
-  .meta {
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 3px;
-    font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
-  }
-  .variant {
-    background: var(--chip); color: var(--ink-2);
-    padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600;
-  }
-  .badge-new {
-    background: var(--accent); color: var(--accent-ink);
-    padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: 0.04em;
+    box-shadow: var(--shadow); overflow: hidden; height: 100%;
+    display: flex; flex-direction: column;
   }
 
-  .move { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-  .pct { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
-  .window { font-size: 11px; color: var(--muted); }
-  .tile.up .pct { color: var(--up); }
-  .tile.down .pct { color: var(--down); }
-
-  .bar-track { position: relative; height: 6px; background: var(--chip); border-radius: 999px; }
-  .bar-zero { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--hairline); }
-  .bar-fill { position: absolute; top: 0; bottom: 0; border-radius: 999px; }
-  .tile.up .bar-fill { background: var(--up-mark); }
-  .tile.down .bar-fill { background: var(--down-mark); }
-
-  .stats {
-    display: flex; gap: 18px; margin: auto 0 0; padding-top: 10px;
-    border-top: 1px solid var(--hairline);
+  /* ---------- tabs (CSS-only) ---------- */
+  .tabin { position: absolute; opacity: 0; pointer-events: none; }
+  .tabs { display: flex; gap: 4px; padding: 10px 12px 0; border-bottom: 1px solid var(--hairline); }
+  .tabs label {
+    padding: 8px 14px; border-radius: 8px 8px 0 0; cursor: pointer;
+    font-size: 13px; font-weight: 620; color: var(--muted);
+    border: 1px solid transparent; border-bottom: none; margin-bottom: -1px;
   }
-  .stats div { display: flex; flex-direction: column; }
-  .stats dt { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1px; }
-  .stats dd { margin: 0; font-size: 15px; font-weight: 620; font-variant-numeric: tabular-nums; }
-  .stats .pct24 { color: var(--ink-2); font-size: 13px; font-weight: 550; }
-
-  /* ---- footer ---- */
-  .notes {
-    margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--hairline);
-    color: var(--muted); font-size: 12.5px; line-height: 1.6; max-width: 78ch;
+  .tabs label:hover { color: var(--ink); background: var(--row-hover); }
+  .panel-body { display: none; flex: 1; min-height: 0; }
+  #t-gain:checked ~ .tabs label[for="t-gain"],
+  #t-lose:checked ~ .tabs label[for="t-lose"] {
+    color: var(--ink); background: var(--surface);
+    border-color: var(--hairline); border-bottom: 1px solid var(--surface);
   }
-  .notes strong { color: var(--ink-2); }
-  .notes p { margin: 0 0 8px; }
-  .notes a { color: inherit; }
+  #t-gain:checked ~ .body-gain, #t-lose:checked ~ .body-lose { display: block; }
+  .tabin:focus-visible ~ .tabs label[for="t-gain"],
+  .tabin:focus-visible ~ .tabs label[for="t-lose"] { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  /* ---------- table ---------- */
+  /* height:100% lets the five rows share out the leftover vertical space, so
+     the board fills the page instead of leaving a gap under a short list. */
+  .board { width: 100%; height: 100%; border-collapse: collapse; }
+  .board th {
+    text-align: left; padding: 9px 16px; font-size: 10px; font-weight: 620;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+    border-bottom: 1px solid var(--hairline); white-space: nowrap;
+    height: 34px;
+  }
+  .board td { padding: 10px 16px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }
+  .board tbody tr { height: 76px; }
+  .board tbody tr:last-child td { border-bottom: none; }
+  .board tbody tr:hover { background: var(--row-hover); }
+  .c-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .c-rank { width: 30px; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .c-spark { width: 88px; }
+  .spark { display: block; }
+
+  .c-card { min-width: 0; }
+  /* the flex lives on an inner span, not the td -- a flex td drops out of
+     table layout and the row borders stop lining up */
+  .c-card .cell { display: flex; align-items: center; gap: 12px; }
+  .thumb {
+    width: 50px; height: 70px; object-fit: contain; border-radius: 5px;
+    background: var(--chip); flex: none;
+  }
+  .thumb-empty { display: grid; place-items: center; font-size: 18px; opacity: .5; }
+  .card-id { display: flex; flex-direction: column; min-width: 0; }
+  .card-set { font-weight: 620; font-size: 15px; letter-spacing: -0.01em; }
+  .card-sub { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 5px; margin-top: 1px; font-variant-numeric: tabular-nums; }
+  .chip { background: var(--chip); color: var(--ink-2); padding: 0 6px; border-radius: 999px; font-size: 10.5px; font-weight: 600; }
+  .chip-new { background: var(--accent); color: var(--accent-ink); font-weight: 800; letter-spacing: 0.03em; }
+
+  .c-price { font-weight: 620; font-size: 15.5px; }
+  .c-change { color: var(--ink-2); font-size: 13.5px; }
+  tr.up .c-change { color: var(--up); }
+  tr.down .c-change { color: var(--down); }
+  .c-24h { color: var(--muted); font-size: 13px; }
+  .pill {
+    display: inline-block; padding: 4px 10px; border-radius: 6px;
+    font-weight: 680; font-size: 14px; font-variant-numeric: tabular-nums;
+  }
+  .pill.up { background: var(--up-wash); color: var(--up); }
+  .pill.down { background: var(--down-wash); color: var(--down); }
+
+  /* ---------- sidebar ---------- */
+  .side { display: flex; flex-direction: column; gap: 12px; }
+  .panel {
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 13px 14px; box-shadow: var(--shadow);
+  }
+  .panel h2 { margin: 0 0 10px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .feature { display: flex; gap: 11px; align-items: center; }
+  .feature .thumb { width: 44px; height: 61px; }
+  .feature-text { display: flex; flex-direction: column; min-width: 0; }
+  .feature-value { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .feature-value.up { color: var(--up); }
+  .feature-value.down { color: var(--down); }
+  .feature-name { font-size: 12.5px; font-weight: 600; margin-top: 1px; }
+  .feature-sub { font-size: 11px; color: var(--muted); }
+  .panel-note { margin: 9px 0 0; font-size: 10.5px; line-height: 1.45; color: var(--muted); }
+
+  .pulse-bar { height: 7px; border-radius: 999px; background: var(--down-mark); overflow: hidden; }
+  .pulse-up { display: block; height: 100%; background: var(--up-mark); }
+  .pulse-legend { display: flex; justify-content: space-between; margin-top: 7px; font-size: 12px; color: var(--ink-2); }
+  .pulse-legend b { font-variant-numeric: tabular-nums; }
+  b.up { color: var(--up); } b.down { color: var(--down); }
+
+  .empty { color: var(--muted); font-size: 12.5px; margin: 4px 0; }
+
+  /* ---------- footer ---------- */
+  .foot { color: var(--muted); font-size: 10.5px; line-height: 1.5; margin: 0; }
+  .foot a { color: inherit; }
+
+  @media (max-width: 900px) {
+    .main { grid-template-columns: 1fr; }
+    .side { flex-direction: row; flex-wrap: wrap; }
+    .side .panel { flex: 1 1 220px; }
+    .c-spark, .c-24h, th.c-spark, th.c-num:last-child { display: none; }
+  }
+  @media (max-width: 560px) {
+    .c-change, .board th:nth-child(5) { display: none; }
+    .head h1 { font-size: 22px; }
+  }
 </style>
 </head>
 <body>
   <div class="wrap">
-    <header class="hero">
-      <div class="title-block">
-        <span class="spark">⚡ Top 10 movers</span>
-        <h1>Pikachu Card Prices</h1>
-        <p>The Pikachu cards that moved the most over the past month, ranked by the size of the move &mdash; gains and drops together.</p>
-      </div>
+    <header class="head">
       <div>
-        <dl class="summary">
-          <div class="stat"><dt>Biggest gain</dt><dd class="up">+155.8%</dd></div>
-          <div class="stat"><dt>Biggest drop</dt><dd class="down">-62.1%</dd></div>
-          <div class="stat"><dt>Gainers</dt><dd>7<span style="font-size:13px;color:var(--muted)"> / 10</span></dd></div>
-        </dl>
-        <p class="stamp" style="margin:10px 0 0">Updated 10 Sep 2026, 03:26 UTC</p>
+        <h1><span class="bolt">⚡</span> Pikachu Card Prices</h1>
+        <p>The Pikachu cards moving most on Cardmarket over the past month — biggest risers and biggest fallers, updated weekly.</p>
+      </div>
+      <div class="head-stats">
+        <div class="kpi"><span>Biggest gain</span><b class="up">+155.8%</b></div>
+        <div class="kpi"><span>Biggest drop</span><b class="down">-62.1%</b></div>
+        <div class="kpi stamp"><span>Last updated</span><b>10 Sep 2026, 04:18 UTC</b></div>
       </div>
     </header>
 
-    <main class="grid">
-      <article class="tile down" title="Cardmarket 30-day avg EUR 33.05 -&gt; 7-day avg EUR 12.53 | price shown is the normal printing">
-        <div class="tile-rank">1</div>
-        <div class="art-frame"><img class="art" src="https://assets.tcgdex.net/en/lc/lc/86/high.webp" loading="lazy" alt="Pikachu - Legendary Collection"></div>
-        <div class="tile-body">
-          <div class="identity">
-            <h2 class="set">Legendary Collection</h2>
-            <div class="meta">#86  </div>
-          </div>
-          <div class="move">
-            <span class="pct">▼ -62.1%</span>
-            <span class="window">30-day move</span>
-          </div>
-          <div class="bar-track" role="presentation">
-            <span class="bar-zero"></span>
-            <span class="bar-fill" style="width:19.93%;right:50%;"></span>
-          </div>
-          <dl class="stats">
-            <div><dt>Price</dt><dd class="price">$6.38</dd></div>
-            <div><dt>Last 24h</dt><dd class="pct24">-86.4%</dd></div>
-          </dl>
+    <div class="main">
+      <div class="board-card">
+        <input class="tabin" type="radio" name="board" id="t-gain" checked>
+        <input class="tabin" type="radio" name="board" id="t-lose">
+        <div class="tabs">
+          <label for="t-gain">Top gainers</label>
+          <label for="t-lose">Top losers</label>
         </div>
-      </article>
+        <div class="panel-body body-gain">
+      <table class="board">
+        <thead>
+          <tr>
+            <th class="c-rank">#</th>
+            <th class="c-card">Card</th>
+            <th class="c-spark">Trend</th>
+            <th class="c-num">Price</th>
+            <th class="c-num">Change</th>
+            <th class="c-num">Change %</th>
+            <th class="c-num">24h</th>
+          </tr>
+        </thead>
+        <tbody>
+        <tr class="up" title="Pikachu — 30-day avg €731.03 → 7-day avg €1869.99 · price is the holofoil printing">
+          <td class="c-rank">1</td>
+          <td class="c-card">
+            <span class="cell">
+              <img class="thumb" src="https://assets.tcgdex.net/en/pl/ru1/7/high.webp" loading="lazy" alt="Pikachu — Pokémon Rumble">
+              <span class="card-id">
+                <span class="card-set">Pokémon Rumble</span>
+                <span class="card-sub">#7  </span>
+              </span>
+            </span>
+          </td>
+          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,26.0 39.0,18.6 78.0,4.0" fill="none" stroke="var(--up-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="4.0" r="1.9" fill="var(--up-mark)"/></svg></td>
+          <td class="c-num c-price">$750.00</td>
+          <td class="c-num c-change">€1,138.96</td>
+          <td class="c-num c-pct"><span class="pill up">▲ +155.8%</span></td>
+          <td class="c-num c-24h">+460.9%</td>
+        </tr>
+        <tr class="up" title="Pikachu δ — 30-day avg €44.17 → 7-day avg €102.71 · price is the normal printing">
+          <td class="c-rank">2</td>
+          <td class="c-card">
+            <span class="cell">
+              <img class="thumb" src="https://assets.tcgdex.net/en/pop/pop5/13/high.webp" loading="lazy" alt="Pikachu δ — POP Series 5">
+              <span class="card-id">
+                <span class="card-set">POP Series 5</span>
+                <span class="card-sub">#13 <span class="chip">δ</span> </span>
+              </span>
+            </span>
+          </td>
+          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,26.0 39.0,22.4 78.0,4.0" fill="none" stroke="var(--up-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="4.0" r="1.9" fill="var(--up-mark)"/></svg></td>
+          <td class="c-num c-price">$52.62</td>
+          <td class="c-num c-change">€58.54</td>
+          <td class="c-num c-pct"><span class="pill up">▲ +132.5%</span></td>
+          <td class="c-num c-24h">+803.3%</td>
+        </tr>
+        <tr class="up" title="Special Delivery Pikachu — 30-day avg €673.39 → 7-day avg €1511.93 · price is the holofoil printing">
+          <td class="c-rank">3</td>
+          <td class="c-card">
+            <span class="cell">
+              <span class="thumb thumb-empty" aria-hidden="true">⚡</span>
+              <span class="card-id">
+                <span class="card-set">SWSH Black Star Promos</span>
+                <span class="card-sub">#SWSH074 <span class="chip">Special Delivery</span> </span>
+              </span>
+            </span>
+          </td>
+          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,26.0 39.0,4.0 78.0,25.6" fill="none" stroke="var(--up-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="25.6" r="1.9" fill="var(--up-mark)"/></svg></td>
+          <td class="c-num c-price">$458.46</td>
+          <td class="c-num c-change">€838.54</td>
+          <td class="c-num c-pct"><span class="pill up">▲ +124.5%</span></td>
+          <td class="c-num c-24h">+2.5%</td>
+        </tr>
+        <tr class="up" title="Pikachu — 30-day avg €12.97 → 7-day avg €28.71 · price is the holofoil printing">
+          <td class="c-rank">4</td>
+          <td class="c-card">
+            <span class="cell">
+              <img class="thumb" src="https://assets.tcgdex.net/en/sm/smp/SM157/high.webp" loading="lazy" alt="Pikachu — SM Black Star Promos">
+              <span class="card-id">
+                <span class="card-set">SM Black Star Promos</span>
+                <span class="card-sub">#SM157  </span>
+              </span>
+            </span>
+          </td>
+          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,26.0 39.0,4.0 78.0,9.2" fill="none" stroke="var(--up-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="9.2" r="1.9" fill="var(--up-mark)"/></svg></td>
+          <td class="c-num c-price">$32.46</td>
+          <td class="c-num c-change">€15.74</td>
+          <td class="c-num c-pct"><span class="pill up">▲ +121.4%</span></td>
+          <td class="c-num c-24h">+92.7%</td>
+        </tr>
+        <tr class="up" title="Pikachu — 30-day avg €2.49 → 7-day avg €4.94 · price is the normal printing">
+          <td class="c-rank">5</td>
+          <td class="c-card">
+            <span class="cell">
+              <span class="thumb thumb-empty" aria-hidden="true">⚡</span>
+              <span class="card-id">
+                <span class="card-set">Shining Legends</span>
+                <span class="card-sub">#28  </span>
+              </span>
+            </span>
+          </td>
+          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,18.9 39.0,4.0 78.0,26.0" fill="none" stroke="var(--up-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="26.0" r="1.9" fill="var(--up-mark)"/></svg></td>
+          <td class="c-num c-price">$2.28</td>
+          <td class="c-num c-change">€2.45</td>
+          <td class="c-num c-pct"><span class="pill up">▲ +98.4%</span></td>
+          <td class="c-num c-24h">-46.6%</td>
+        </tr></tbody>
+      </table></div>
+        <div class="panel-body body-lose">
+      <table class="board">
+        <thead>
+          <tr>
+            <th class="c-rank">#</th>
+            <th class="c-card">Card</th>
+            <th class="c-spark">Trend</th>
+            <th class="c-num">Price</th>
+            <th class="c-num">Change</th>
+            <th class="c-num">Change %</th>
+            <th class="c-num">24h</th>
+          </tr>
+        </thead>
+        <tbody>
+        <tr class="down" title="Pikachu — 30-day avg €33.05 → 7-day avg €12.53 · price is the normal printing">
+          <td class="c-rank">1</td>
+          <td class="c-card">
+            <span class="cell">
+              <img class="thumb" src="https://assets.tcgdex.net/en/lc/lc/86/high.webp" loading="lazy" alt="Pikachu — Legendary Collection">
+              <span class="card-id">
+                <span class="card-set">Legendary Collection</span>
+                <span class="card-sub">#86  </span>
+              </span>
+            </span>
+          </td>
+          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,4.0 39.0,19.8 78.0,26.0" fill="none" stroke="var(--down-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="26.0" r="1.9" fill="var(--down-mark)"/></svg></td>
+          <td class="c-num c-price">$6.38</td>
+          <td class="c-num c-change">€-20.52</td>
+          <td class="c-num c-pct"><span class="pill down">▼ -62.1%</span></td>
+          <td class="c-num c-24h">-86.4%</td>
+        </tr>
+        <tr class="down" title="Pikachu — 30-day avg €5.14 → 7-day avg €3.21 · price is the normal printing">
+          <td class="c-rank">2</td>
+          <td class="c-card">
+            <span class="cell">
+              <img class="thumb" src="https://assets.tcgdex.net/en/hgss/hgss1/78/high.webp" loading="lazy" alt="Pikachu — HeartGold SoulSilver">
+              <span class="card-id">
+                <span class="card-set">HeartGold SoulSilver</span>
+                <span class="card-sub">#78  </span>
+              </span>
+            </span>
+          </td>
+          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,4.0 39.0,18.3 78.0,26.0" fill="none" stroke="var(--down-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="26.0" r="1.9" fill="var(--down-mark)"/></svg></td>
+          <td class="c-num c-price">$11.78</td>
+          <td class="c-num c-change">€-1.93</td>
+          <td class="c-num c-pct"><span class="pill down">▼ -37.5%</span></td>
+          <td class="c-num c-24h">-57.8%</td>
+        </tr>
+        <tr class="down" title="Pikachu — 30-day avg €6.38 → 7-day avg €4.10 · price is the normal printing">
+          <td class="c-rank">3</td>
+          <td class="c-card">
+            <span class="cell">
+              <img class="thumb" src="https://assets.tcgdex.net/en/dp/dp2/94/high.webp" loading="lazy" alt="Pikachu — Mysterious Treasures">
+              <span class="card-id">
+                <span class="card-set">Mysterious Treasures</span>
+                <span class="card-sub">#94  </span>
+              </span>
+            </span>
+          </td>
+          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,4.0 39.0,16.9 78.0,26.0" fill="none" stroke="var(--down-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="26.0" r="1.9" fill="var(--down-mark)"/></svg></td>
+          <td class="c-num c-price">$19.96</td>
+          <td class="c-num c-change">€-2.28</td>
+          <td class="c-num c-pct"><span class="pill down">▼ -35.7%</span></td>
+          <td class="c-num c-24h">-60.8%</td>
+        </tr>
+        <tr class="down" title="Pikachu — 30-day avg €65.42 → 7-day avg €43.46 · price is the no TCGplayer listing">
+          <td class="c-rank">4</td>
+          <td class="c-card">
+            <span class="cell">
+              <img class="thumb" src="https://assets.tcgdex.net/en/xy/xyp/XY202/high.webp" loading="lazy" alt="Pikachu — XY Black Star Promos">
+              <span class="card-id">
+                <span class="card-set">XY Black Star Promos</span>
+                <span class="card-sub">#XY202  </span>
+              </span>
+            </span>
+          </td>
+          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,4.0 39.0,14.6 78.0,26.0" fill="none" stroke="var(--down-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="26.0" r="1.9" fill="var(--down-mark)"/></svg></td>
+          <td class="c-num c-price">—</td>
+          <td class="c-num c-change">€-21.96</td>
+          <td class="c-num c-pct"><span class="pill down">▼ -33.6%</span></td>
+          <td class="c-num c-24h">-69.4%</td>
+        </tr>
+        <tr class="down" title="Pikachu — 30-day avg €79.48 → 7-day avg €54.07 · price is the normal printing">
+          <td class="c-rank">5</td>
+          <td class="c-card">
+            <span class="cell">
+              <img class="thumb" src="https://assets.tcgdex.net/en/pop/pop5/12/high.webp" loading="lazy" alt="Pikachu — POP Series 5">
+              <span class="card-id">
+                <span class="card-set">POP Series 5</span>
+                <span class="card-sub">#12  </span>
+              </span>
+            </span>
+          </td>
+          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,16.8 39.0,26.0 78.0,4.0" fill="none" stroke="var(--down-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="4.0" r="1.9" fill="var(--down-mark)"/></svg></td>
+          <td class="c-num c-price">$62.87</td>
+          <td class="c-num c-change">€-25.41</td>
+          <td class="c-num c-pct"><span class="pill down">▼ -32.0%</span></td>
+          <td class="c-num c-24h">+44.7%</td>
+        </tr></tbody>
+      </table></div>
+      </div>
 
-      <article class="tile up" title="Cardmarket 30-day avg EUR 731.03 -&gt; 7-day avg EUR 1869.99 | price shown is the holofoil printing">
-        <div class="tile-rank">2</div>
-        <div class="art-frame"><img class="art" src="https://assets.tcgdex.net/en/pl/ru1/7/high.webp" loading="lazy" alt="Pikachu - Pokémon Rumble"></div>
-        <div class="tile-body">
-          <div class="identity">
-            <h2 class="set">Pokémon Rumble</h2>
-            <div class="meta">#7  </div>
+      
+      <aside class="side">
+        <section class="panel">
+          <h2>Priciest Pikachu</h2>
+          
+        <div class="feature">
+          <img class="thumb" src="https://assets.tcgdex.net/en/me/me02.5/276/high.webp" loading="lazy" alt="Pikachu ex — Ascended Heroes">
+          <div class="feature-text">
+            <span class="feature-value">$986.76</span>
+            <span class="feature-name">Ascended Heroes</span>
+            <span class="feature-sub">#276
+              ex</span>
           </div>
-          <div class="move">
-            <span class="pct">▲ +155.8%</span>
-            <span class="window">30-day move</span>
-          </div>
-          <div class="bar-track" role="presentation">
-            <span class="bar-zero"></span>
-            <span class="bar-fill" style="width:50.00%;left:50%;"></span>
-          </div>
-          <dl class="stats">
-            <div><dt>Price</dt><dd class="price">$750.00</dd></div>
-            <div><dt>Last 24h</dt><dd class="pct24">+460.9%</dd></div>
-          </dl>
         </div>
-      </article>
+          <p class="panel-note">Highest TCGplayer market price of the 149 cards tracked.</p>
+        </section>
 
-      <article class="tile up" title="Cardmarket 30-day avg EUR 44.17 -&gt; 7-day avg EUR 102.71 | price shown is the normal printing">
-        <div class="tile-rank">3</div>
-        <div class="art-frame"><img class="art" src="https://assets.tcgdex.net/en/pop/pop5/13/high.webp" loading="lazy" alt="Pikachu δ - POP Series 5"></div>
-        <div class="tile-body">
-          <div class="identity">
-            <h2 class="set">POP Series 5</h2>
-            <div class="meta">#13 <span class="variant">δ</span> </div>
+        <section class="panel">
+          <h2>Wildest 24h swing</h2>
+          
+        <div class="feature">
+          <img class="thumb" src="https://assets.tcgdex.net/en/bw/bw11/RC7/high.webp" loading="lazy" alt="Pikachu — Legendary Treasures">
+          <div class="feature-text">
+            <span class="feature-value up">+322%</span>
+            <span class="feature-name">Legendary Treasures</span>
+            <span class="feature-sub">1-day avg vs 7-day avg</span>
           </div>
-          <div class="move">
-            <span class="pct">▲ +132.5%</span>
-            <span class="window">30-day move</span>
-          </div>
-          <div class="bar-track" role="presentation">
-            <span class="bar-zero"></span>
-            <span class="bar-fill" style="width:42.53%;left:50%;"></span>
-          </div>
-          <dl class="stats">
-            <div><dt>Price</dt><dd class="price">$52.62</dd></div>
-            <div><dt>Last 24h</dt><dd class="pct24">+803.3%</dd></div>
-          </dl>
         </div>
-      </article>
+          <p class="panel-note">The sharpest one-day move against the weekly average — a single sale can cause it.</p>
+        </section>
 
-      <article class="tile up" title="Cardmarket 30-day avg EUR 673.39 -&gt; 7-day avg EUR 1511.93 | price shown is the holofoil printing">
-        <div class="tile-rank">4</div>
-        <div class="art-frame"><div class="art art-missing"><span class="art-missing-bolt" aria-hidden="true">⚡</span><span class="art-missing-label">No artwork<br>on file</span></div></div>
-        <div class="tile-body">
-          <div class="identity">
-            <h2 class="set">SWSH Black Star Promos</h2>
-            <div class="meta">#SWSH074 <span class="variant">Special Delivery</span> </div>
+        <section class="panel">
+          <h2>Market pulse</h2>
+          <div class="pulse">
+            <div class="pulse-bar">
+              <span class="pulse-up" style="width:52.3%"></span>
+            </div>
+            <div class="pulse-legend">
+              <span><b class="up">78</b> rising</span>
+              <span><b class="down">69</b> falling</span>
+            </div>
           </div>
-          <div class="move">
-            <span class="pct">▲ +124.5%</span>
-            <span class="window">30-day move</span>
-          </div>
-          <div class="bar-track" role="presentation">
-            <span class="bar-zero"></span>
-            <span class="bar-fill" style="width:39.96%;left:50%;"></span>
-          </div>
-          <dl class="stats">
-            <div><dt>Price</dt><dd class="price">$458.46</dd></div>
-            <div><dt>Last 24h</dt><dd class="pct24">+2.5%</dd></div>
-          </dl>
-        </div>
-      </article>
+          <p class="panel-note">Across 149 Pikachu cards with usable Cardmarket pricing
+          (50 skipped for missing data or a sub-€1 average).</p>
+        </section>
+      </aside>
+    </div>
 
-      <article class="tile up" title="Cardmarket 30-day avg EUR 12.97 -&gt; 7-day avg EUR 28.71 | price shown is the holofoil printing">
-        <div class="tile-rank">5</div>
-        <div class="art-frame"><img class="art" src="https://assets.tcgdex.net/en/sm/smp/SM157/high.webp" loading="lazy" alt="Pikachu - SM Black Star Promos"></div>
-        <div class="tile-body">
-          <div class="identity">
-            <h2 class="set">SM Black Star Promos</h2>
-            <div class="meta">#SM157  </div>
-          </div>
-          <div class="move">
-            <span class="pct">▲ +121.4%</span>
-            <span class="window">30-day move</span>
-          </div>
-          <div class="bar-track" role="presentation">
-            <span class="bar-zero"></span>
-            <span class="bar-fill" style="width:38.95%;left:50%;"></span>
-          </div>
-          <dl class="stats">
-            <div><dt>Price</dt><dd class="price">$32.46</dd></div>
-            <div><dt>Last 24h</dt><dd class="pct24">+92.7%</dd></div>
-          </dl>
-        </div>
-      </article>
-
-      <article class="tile up" title="Cardmarket 30-day avg EUR 2.49 -&gt; 7-day avg EUR 4.94 | price shown is the normal printing">
-        <div class="tile-rank">6</div>
-        <div class="art-frame"><div class="art art-missing"><span class="art-missing-bolt" aria-hidden="true">⚡</span><span class="art-missing-label">No artwork<br>on file</span></div></div>
-        <div class="tile-body">
-          <div class="identity">
-            <h2 class="set">Shining Legends</h2>
-            <div class="meta">#28  </div>
-          </div>
-          <div class="move">
-            <span class="pct">▲ +98.4%</span>
-            <span class="window">30-day move</span>
-          </div>
-          <div class="bar-track" role="presentation">
-            <span class="bar-zero"></span>
-            <span class="bar-fill" style="width:31.58%;left:50%;"></span>
-          </div>
-          <dl class="stats">
-            <div><dt>Price</dt><dd class="price">$2.28</dd></div>
-            <div><dt>Last 24h</dt><dd class="pct24">-46.6%</dd></div>
-          </dl>
-        </div>
-      </article>
-
-      <article class="tile up" title="Cardmarket 30-day avg EUR 27.48 -&gt; 7-day avg EUR 45.64 | price shown is the normal printing">
-        <div class="tile-rank">7</div>
-        <div class="art-frame"><img class="art" src="https://assets.tcgdex.net/en/pop/pop9/15/high.webp" loading="lazy" alt="Pikachu - POP Series 9"></div>
-        <div class="tile-body">
-          <div class="identity">
-            <h2 class="set">POP Series 9</h2>
-            <div class="meta">#15  </div>
-          </div>
-          <div class="move">
-            <span class="pct">▲ +66.1%</span>
-            <span class="window">30-day move</span>
-          </div>
-          <div class="bar-track" role="presentation">
-            <span class="bar-zero"></span>
-            <span class="bar-fill" style="width:21.21%;left:50%;"></span>
-          </div>
-          <dl class="stats">
-            <div><dt>Price</dt><dd class="price">$19.84</dd></div>
-            <div><dt>Last 24h</dt><dd class="pct24">-56.4%</dd></div>
-          </dl>
-        </div>
-      </article>
-
-      <article class="tile down" title="Cardmarket 30-day avg EUR 5.14 -&gt; 7-day avg EUR 3.21 | price shown is the normal printing">
-        <div class="tile-rank">8</div>
-        <div class="art-frame"><img class="art" src="https://assets.tcgdex.net/en/hgss/hgss1/78/high.webp" loading="lazy" alt="Pikachu - HeartGold SoulSilver"></div>
-        <div class="tile-body">
-          <div class="identity">
-            <h2 class="set">HeartGold SoulSilver</h2>
-            <div class="meta">#78  </div>
-          </div>
-          <div class="move">
-            <span class="pct">▼ -37.5%</span>
-            <span class="window">30-day move</span>
-          </div>
-          <div class="bar-track" role="presentation">
-            <span class="bar-zero"></span>
-            <span class="bar-fill" style="width:12.05%;right:50%;"></span>
-          </div>
-          <dl class="stats">
-            <div><dt>Price</dt><dd class="price">$11.78</dd></div>
-            <div><dt>Last 24h</dt><dd class="pct24">-57.8%</dd></div>
-          </dl>
-        </div>
-      </article>
-
-      <article class="tile up" title="Cardmarket 30-day avg EUR 36.56 -&gt; 7-day avg EUR 57.94 | price shown is the normal printing">
-        <div class="tile-rank">9</div>
-        <div class="art-frame"><img class="art" src="https://assets.tcgdex.net/en/sm/smp/SM114/high.webp" loading="lazy" alt="Ash&#x27;s Pikachu - SM Black Star Promos"></div>
-        <div class="tile-body">
-          <div class="identity">
-            <h2 class="set">SM Black Star Promos</h2>
-            <div class="meta">#SM114 <span class="variant">Ash&#x27;s</span> </div>
-          </div>
-          <div class="move">
-            <span class="pct">▲ +58.5%</span>
-            <span class="window">30-day move</span>
-          </div>
-          <div class="bar-track" role="presentation">
-            <span class="bar-zero"></span>
-            <span class="bar-fill" style="width:18.77%;left:50%;"></span>
-          </div>
-          <dl class="stats">
-            <div><dt>Price</dt><dd class="price">$50.96</dd></div>
-            <div><dt>Last 24h</dt><dd class="pct24">-45.3%</dd></div>
-          </dl>
-        </div>
-      </article>
-
-      <article class="tile down" title="Cardmarket 30-day avg EUR 6.38 -&gt; 7-day avg EUR 4.10 | price shown is the normal printing">
-        <div class="tile-rank">10</div>
-        <div class="art-frame"><img class="art" src="https://assets.tcgdex.net/en/dp/dp2/94/high.webp" loading="lazy" alt="Pikachu - Mysterious Treasures"></div>
-        <div class="tile-body">
-          <div class="identity">
-            <h2 class="set">Mysterious Treasures</h2>
-            <div class="meta">#94  </div>
-          </div>
-          <div class="move">
-            <span class="pct">▼ -35.7%</span>
-            <span class="window">30-day move</span>
-          </div>
-          <div class="bar-track" role="presentation">
-            <span class="bar-zero"></span>
-            <span class="bar-fill" style="width:11.47%;right:50%;"></span>
-          </div>
-          <dl class="stats">
-            <div><dt>Price</dt><dd class="price">$19.96</dd></div>
-            <div><dt>Last 24h</dt><dd class="pct24">-60.8%</dd></div>
-          </dl>
-        </div>
-      </article>
-</main>
-
-    <footer class="notes">
-      <p><strong>How the move is measured.</strong> Cardmarket publishes rolling trailing averages in EUR. The 30-day move is
-      (7-day average &minus; 30-day average) &divide; 30-day average &mdash; a moving-average crossover, not the price exactly
-      30 days ago. &ldquo;Last 24h&rdquo; is the same comparison against the 1-day average, which is a single day of sales and
-      much noisier.</p>
-      <p><strong>How the top 10 is chosen.</strong> By the size of the move on a log scale, so a halving and a doubling count
-      equally. A plain percentage ranking would be almost all gainers, because a drop can never exceed &minus;100% while a gain
-      has no ceiling. Cards averaging under &euro;1.00 are left out &mdash; a few cents of movement on a bulk common reads as a
-      triple-digit swing.</p>
-      <p><strong>Price</strong> is the TCGplayer market price in USD for the card&rsquo;s base printing, shown as a snapshot for
-      scale &mdash; the ranking is not based on it, and it is a different marketplace and currency from the EUR figures above.
-      Cards with no Cardmarket 7- or 30-day average are skipped rather than counted as flat. A <strong>NEW!</strong> badge marks
-      a set released in the last 30 days. Data from <a href="https://tcgdex.dev/">TCGdex</a>.</p>
+    <footer class="foot">
+      <strong>Change</strong> is Cardmarket's 7-day average against its 30-day average, in EUR — a moving-average
+      crossover, not the price exactly 30 days ago. <strong>Price</strong> is the TCGplayer market price in USD for the
+      card's base printing, shown for scale only. <strong>Trend</strong> plots the 30-, 7- and 1-day averages.
+      Cards averaging under €1.00, or missing Cardmarket averages, are excluded. Data from
+      <a href="https://tcgdex.dev/">TCGdex</a>.
     </footer>
   </div>
 </body>

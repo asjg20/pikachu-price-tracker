@@ -76,7 +76,44 @@ TCGPLAYER_VARIANT_PRIORITY = [
     "unlimited",
 ]
 
+# TCGdex occasionally returns a transient 5xx. The weekly workflow runs
+# unattended, so a single blip must not take down the whole report.
+MAX_RETRIES = 3
+RETRY_BACKOFF_SECONDS = 1.5
+
 logger = logging.getLogger(__name__)
+
+
+def _get_json(url, params=None):
+    """GET a TCGdex URL and return parsed JSON, retrying transient failures.
+
+    Retries on connection errors, timeouts and 5xx responses with a linear
+    backoff. A 404 (or any other 4xx) is not retried -- it's a real answer.
+    """
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.get(url, params=params, timeout=30)
+            if response.status_code >= 500:
+                raise requests.exceptions.HTTPError(
+                    f"{response.status_code} server error", response=response
+                )
+            response.raise_for_status()
+            return response.json()
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.HTTPError) as error:
+            status = getattr(getattr(error, "response", None), "status_code", None)
+            if status is not None and status < 500:
+                raise  # a genuine 4xx -- retrying won't help
+            last_error = error
+            if attempt < MAX_RETRIES:
+                logger.warning(
+                    "%s failed (attempt %d/%d): %s -- retrying",
+                    url, attempt, MAX_RETRIES, error,
+                )
+                time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+    raise last_error
 
 
 def fetch_all_pikachu_card_ids():
@@ -86,9 +123,7 @@ def fetch_all_pikachu_card_ids():
     picks up "Pikachu V", "Pikachu VMAX", "Pikachu ex", etc. Expect 100+
     results -- that's correct, we need all of them to find the top movers.
     """
-    response = requests.get(f"{BASE_URL}/cards", params={"name": "pikachu"}, timeout=30)
-    response.raise_for_status()
-    cards = response.json()
+    cards = _get_json(f"{BASE_URL}/cards", params={"name": "pikachu"})
     return [card["id"] for card in cards]
 
 
@@ -131,9 +166,7 @@ def fetch_card_pricing(card_id):
     Returns None (and logs why) if the card is unrankable: no cardmarket
     pricing at all, missing avg7/avg30, or below the price floor.
     """
-    response = requests.get(f"{BASE_URL}/cards/{card_id}", timeout=30)
-    response.raise_for_status()
-    data = response.json()
+    data = _get_json(f"{BASE_URL}/cards/{card_id}")
 
     pricing = data.get("pricing") or {}
     cardmarket = pricing.get("cardmarket")
@@ -172,8 +205,11 @@ def fetch_card_pricing(card_id):
         "image_url": f"{image_base}/high.webp" if image_base else None,
         "pct_change_month": pct_change_month,
         "pct_change_24h": pct_change_24h,
+        "change_eur": avg7 - avg30,
         "usd_display_price": usd_price,
         "usd_price_variant": usd_variant,
+        "cm_product_id": cardmarket.get("idProduct"),
+        "avg1_eur": avg1,
         "avg30_eur": avg30,
         "avg7_eur": avg7,
     }
@@ -185,9 +221,7 @@ def fetch_set_release_date(set_id):
     if set_id in _set_release_date_cache:
         return _set_release_date_cache[set_id]
 
-    response = requests.get(f"{BASE_URL}/sets/{set_id}", timeout=30)
-    response.raise_for_status()
-    release_date = response.json().get("releaseDate")
+    release_date = _get_json(f"{BASE_URL}/sets/{set_id}").get("releaseDate")
 
     _set_release_date_cache[set_id] = release_date
     return release_date
@@ -215,12 +249,12 @@ def _rank_score(card):
     return abs(math.log(avg7 / avg30))
 
 
-def get_top_movers(n=10):
-    """Fetch pricing for every Pikachu-named card and return the top n movers.
+def fetch_all_rankable_cards():
+    """Fetch pricing for every Pikachu-named card.
 
-    "Top" means largest log-ratio move (see _rank_score); each returned card
-    keeps its own signed pct_change_month so gainers and droppers are both
-    represented and distinguishable.
+    Returns (rankable_cards, skipped_count). This is the expensive call --
+    one request per card -- so callers that need several views of the data
+    should call it once and slice the result rather than re-fetching.
     """
     card_ids = fetch_all_pikachu_card_ids()
 
@@ -235,123 +269,321 @@ def get_top_movers(n=10):
         if index < len(card_ids) - 1:
             time.sleep(REQUEST_DELAY_SECONDS)
 
+    deduped = _dedupe_by_product(rankable)
     logger.info(
-        "fetched %d cards: %d rankable, %d skipped",
-        len(card_ids), len(rankable), skipped,
+        "fetched %d cards: %d rankable (%d after de-duplication), %d skipped",
+        len(card_ids), len(rankable), len(deduped), skipped,
     )
+    return deduped, skipped
 
-    top = sorted(rankable, key=_rank_score, reverse=True)[:n]
 
-    # Enrich only the final top-N with release-date/"NEW!" info -- fetching
-    # this for all 150+ rankable cards would roughly double the API calls
-    # for no benefit, since only the top-N ever get shown.
-    for card in top:
+def _dedupe_by_product(cards):
+    """Collapse cards that share one Cardmarket product into a single entry.
+
+    TCGdex sometimes lists the same physical card under several ids (e.g.
+    xyp-XY95 and xyp-XY202 both map to Cardmarket idProduct 289809), and
+    they carry byte-identical pricing. Left alone they show up as duplicate
+    rows and eat slots in a top-5. Where duplicates exist we keep the most
+    complete record -- one with a USD price and artwork beats one without.
+    """
+    best_by_product = {}
+    passthrough = []
+
+    for card in cards:
+        product_id = card.get("cm_product_id")
+        if product_id is None:
+            passthrough.append(card)
+            continue
+        completeness = (
+            card.get("usd_display_price") is not None,
+            card.get("image_url") is not None,
+        )
+        existing = best_by_product.get(product_id)
+        if existing is None or completeness > existing[0]:
+            best_by_product[product_id] = (completeness, card)
+
+    return passthrough + [card for _, card in best_by_product.values()]
+
+
+def _add_new_badges(cards):
+    """Look up each card's set release date and flag recent releases.
+
+    Done for a handful of selected cards rather than every rankable one --
+    that would roughly double the API calls for information only the
+    displayed rows ever use. Results are cached per set id.
+    """
+    for card in cards:
         set_id = card.get("set_id")
-        release_date = fetch_set_release_date(set_id) if set_id else None
+        release_date = None
+        if set_id:
+            try:
+                release_date = fetch_set_release_date(set_id)
+            except requests.exceptions.RequestException as error:
+                # A cosmetic badge is never worth failing the whole report for.
+                logger.warning("could not read release date for set %s: %s", set_id, error)
         card["release_date"] = release_date
         card["is_new"] = _is_recently_released(release_date)
         time.sleep(REQUEST_DELAY_SECONDS)
+    return cards
 
-    return top
+
+def get_top_movers(n=10):
+    """Return the n biggest movers, gainers and droppers mixed together.
+
+    "Biggest" means largest log-ratio move (see _rank_score); each returned
+    card keeps its own signed pct_change_month. Used by the notebook; the
+    HTML report uses get_gainers_and_losers instead, which splits the two
+    directions into separate lists.
+    """
+    rankable, _ = fetch_all_rankable_cards()
+    top = sorted(rankable, key=_rank_score, reverse=True)[:n]
+    return _add_new_badges(top)
+
+
+def _wildest_24h_swing(rankable):
+    """The card whose 1-day average has moved furthest from its 7-day average.
+
+    This is the one job avg1 is actually good for: it's too noisy to rank a
+    monthly trend on, but that same sensitivity makes it a decent detector of
+    "something happened to this card in the last day".
+    """
+    candidates = [
+        c for c in rankable
+        if c.get("avg1_eur") is not None and c.get("avg7_eur")
+    ]
+    if not candidates:
+        return None
+    card = max(candidates, key=lambda c: abs(c["avg1_eur"] - c["avg7_eur"]) / c["avg7_eur"])
+    swing = (card["avg1_eur"] - card["avg7_eur"]) / card["avg7_eur"] * 100
+    return {"card": card, "swing_pct": swing}
+
+
+def get_gainers_and_losers(n=5):
+    """Return the top n gainers and top n losers, plus summary stats.
+
+    Splitting the two directions into separate lists removes the need for the
+    log-ratio trick used by get_top_movers: percent change is bounded at
+    -100% but unbounded upward, which skews a *combined* ranking toward
+    gainers, but within a single-direction list a plain percentage sort is
+    exactly right.
+    """
+    rankable, skipped = fetch_all_rankable_cards()
+
+    by_move = sorted(rankable, key=lambda c: c["pct_change_month"], reverse=True)
+    gainers = [c for c in by_move if c["pct_change_month"] > 0][:n]
+    losers = [c for c in reversed(by_move) if c["pct_change_month"] < 0][:n]
+
+    _add_new_badges(gainers + losers)
+
+    priced = [c for c in rankable if c.get("usd_display_price") is not None]
+    priciest = max(priced, key=lambda c: c["usd_display_price"]) if priced else None
+
+    return {
+        "gainers": gainers,
+        "losers": losers,
+        "stats": {
+            "tracked": len(rankable),
+            "skipped": skipped,
+            "gainer_count": sum(1 for c in rankable if c["pct_change_month"] > 0),
+            "loser_count": sum(1 for c in rankable if c["pct_change_month"] < 0),
+            "priciest": priciest,
+            "wildest_24h": _wildest_24h_swing(rankable),
+        },
+    }
 
 
 def _fmt_pct(value):
-    return f"{value:+.1f}%" if value is not None else "n/a"
+    return f"{value:+.1f}%" if value is not None else "—"
 
 
 def _fmt_usd(value):
-    return f"${value:,.2f}" if value is not None else "n/a"
+    return f"${value:,.2f}" if value is not None else "—"
 
 
-def _card_tile_html(rank, card, max_abs_pct):
-    """Render one mover as a card tile: image, set identity, move, price."""
-    is_gainer = card["pct_change_month"] >= 0
-    direction = "up" if is_gainer else "down"
-    arrow = "▲" if is_gainer else "▼"
+def _fmt_eur(value):
+    return f"€{value:,.2f}" if value is not None else "—"
+
+
+def _sparkline_svg(card, direction):
+    """A 3-point trend line: 30-day avg -> 7-day avg -> 1-day avg.
+
+    These are three rolling averages, not a price history -- it shows the
+    direction the averages are pointing, which is exactly what the table
+    ranks on. Cards with no avg1 draw the two points they do have.
+    """
+    points = [card["avg30_eur"], card["avg7_eur"]]
+    if card.get("avg1_eur") is not None:
+        points.append(card["avg1_eur"])
+
+    width, height, pad = 78.0, 30.0, 4.0
+    low, high = min(points), max(points)
+    span = (high - low) or 1.0
+    step = width / (len(points) - 1)
+    coords = [
+        (i * step, height - pad - ((value - low) / span) * (height - 2 * pad))
+        for i, value in enumerate(points)
+    ]
+    path = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    last_x, last_y = coords[-1]
+
+    return (
+        f'<svg class="spark" viewBox="0 0 {width:.0f} {height:.0f}" width="{width:.0f}" '
+        f'height="{height:.0f}" aria-hidden="true" focusable="false">'
+        f'<polyline points="{path}" fill="none" stroke="var(--{direction}-mark)" '
+        f'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+        f'<circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="1.9" fill="var(--{direction}-mark)"/>'
+        f"</svg>"
+    )
+
+
+def _thumb_html(card):
+    image_url = card.get("image_url")
+    if image_url:
+        alt = html.escape(f"{card.get('name') or 'Pikachu'} — {card.get('set') or ''}")
+        return f'<img class="thumb" src="{html.escape(image_url)}" loading="lazy" alt="{alt}">'
+    return '<span class="thumb thumb-empty" aria-hidden="true">⚡</span>'
+
+
+def _row_html(rank, card):
+    direction = "up" if card["pct_change_month"] >= 0 else "down"
+    arrow = "▲" if direction == "up" else "▼"
 
     set_name = html.escape(card.get("set") or "Unknown set")
     local_id = html.escape(str(card.get("local_id") or ""))
     variant = html.escape(card.get("variant_label") or "")
-    variant_html = f'<span class="variant">{variant}</span>' if variant else ""
-    new_html = '<span class="badge-new">NEW!</span>' if card.get("is_new") else ""
-    number_html = f"#{local_id}" if local_id else ""
-
-    image_url = card.get("image_url")
-    if image_url:
-        alt = html.escape(f"{card.get('name') or 'Pikachu card'} - {card.get('set') or ''}")
-        art = (
-            f'<img class="art" src="{html.escape(image_url)}" loading="lazy" alt="{alt}">'
-        )
-    else:
-        # TCGdex genuinely has no artwork for some promos (e.g. swshp-SWSH074).
-        # Say so, rather than showing something that reads as a broken image.
-        art = (
-            '<div class="art art-missing">'
-            '<span class="art-missing-bolt" aria-hidden="true">⚡</span>'
-            '<span class="art-missing-label">No artwork<br>on file</span>'
-            "</div>"
-        )
-
-    # Diverging magnitude bar on a scale shared by every tile, so bar lengths
-    # are comparable across the grid. Grows right from centre for a gain,
-    # left for a drop.
-    width_pct = (abs(card["pct_change_month"]) / max_abs_pct * 50) if max_abs_pct else 0
-    side = "left:50%;" if is_gainer else "right:50%;"
-    bar_style = f"width:{width_pct:.2f}%;{side}"
+    variant_html = f'<span class="chip">{variant}</span>' if variant else ""
+    new_html = '<span class="chip chip-new">NEW</span>' if card.get("is_new") else ""
 
     price_variant = card.get("usd_price_variant")
-    price_note = (
-        f"{price_variant.replace('-', ' ')} printing" if price_variant
-        else "no TCGplayer listing"
-    )
+    note = f"{price_variant.replace('-', ' ')} printing" if price_variant else "no TCGplayer listing"
     tooltip = html.escape(
-        f"Cardmarket 30-day avg EUR {card['avg30_eur']:.2f} -> 7-day avg EUR {card['avg7_eur']:.2f}"
-        f" | price shown is the {price_note}"
+        f"{card.get('name')} — 30-day avg €{card['avg30_eur']:.2f} → "
+        f"7-day avg €{card['avg7_eur']:.2f} · price is the {note}"
     )
 
     return f"""
-      <article class="tile {direction}" title="{tooltip}">
-        <div class="tile-rank">{rank}</div>
-        <div class="art-frame">{art}</div>
-        <div class="tile-body">
-          <div class="identity">
-            <h2 class="set">{set_name}</h2>
-            <div class="meta">{number_html} {variant_html} {new_html}</div>
-          </div>
-          <div class="move">
-            <span class="pct">{arrow} {card['pct_change_month']:+.1f}%</span>
-            <span class="window">30-day move</span>
-          </div>
-          <div class="bar-track" role="presentation">
-            <span class="bar-zero"></span>
-            <span class="bar-fill" style="{bar_style}"></span>
-          </div>
-          <dl class="stats">
-            <div><dt>Price</dt><dd class="price">{_fmt_usd(card.get('usd_display_price'))}</dd></div>
-            <div><dt>Last 24h</dt><dd class="pct24">{_fmt_pct(card.get('pct_change_24h'))}</dd></div>
-          </dl>
-        </div>
-      </article>
-"""
+        <tr class="{direction}" title="{tooltip}">
+          <td class="c-rank">{rank}</td>
+          <td class="c-card">
+            <span class="cell">
+              {_thumb_html(card)}
+              <span class="card-id">
+                <span class="card-set">{set_name}</span>
+                <span class="card-sub">{f'#{local_id}' if local_id else ''} {variant_html} {new_html}</span>
+              </span>
+            </span>
+          </td>
+          <td class="c-spark">{_sparkline_svg(card, direction)}</td>
+          <td class="c-num c-price">{_fmt_usd(card.get('usd_display_price'))}</td>
+          <td class="c-num c-change">{_fmt_eur(card.get('change_eur'))}</td>
+          <td class="c-num c-pct"><span class="pill {direction}">{arrow} {card['pct_change_month']:+.1f}%</span></td>
+          <td class="c-num c-24h">{_fmt_pct(card.get('pct_change_24h'))}</td>
+        </tr>"""
 
 
-def render_html_report(movers):
-    """Render the Pikachu card price report as a self-contained HTML page
-    (inline CSS, no external assets beyond the card art) suitable for writing
-    straight to docs/index.html for GitHub Pages.
+def _table_html(cards, empty_message):
+    if not cards:
+        return f'<p class="empty">{empty_message}</p>'
+    rows = "".join(_row_html(rank, card) for rank, card in enumerate(cards, start=1))
+    return f"""
+      <table class="board">
+        <thead>
+          <tr>
+            <th class="c-rank">#</th>
+            <th class="c-card">Card</th>
+            <th class="c-spark">Trend</th>
+            <th class="c-num">Price</th>
+            <th class="c-num">Change</th>
+            <th class="c-num">Change %</th>
+            <th class="c-num">24h</th>
+          </tr>
+        </thead>
+        <tbody>{rows}</tbody>
+      </table>"""
+
+
+def _aside_html(stats):
+    priciest = stats.get("priciest")
+    wildest = stats.get("wildest_24h")
+
+    if priciest:
+        priciest_block = f"""
+        <div class="feature">
+          {_thumb_html(priciest)}
+          <div class="feature-text">
+            <span class="feature-value">{_fmt_usd(priciest.get('usd_display_price'))}</span>
+            <span class="feature-name">{html.escape(priciest.get('set') or '')}</span>
+            <span class="feature-sub">#{html.escape(str(priciest.get('local_id') or ''))}
+              {html.escape(priciest.get('variant_label') or '')}</span>
+          </div>
+        </div>"""
+    else:
+        priciest_block = '<p class="empty">No priced cards.</p>'
+
+    if wildest:
+        card = wildest["card"]
+        swing_dir = "up" if wildest["swing_pct"] >= 0 else "down"
+        wildest_block = f"""
+        <div class="feature">
+          {_thumb_html(card)}
+          <div class="feature-text">
+            <span class="feature-value {swing_dir}">{wildest['swing_pct']:+.0f}%</span>
+            <span class="feature-name">{html.escape(card.get('set') or '')}</span>
+            <span class="feature-sub">1-day avg vs 7-day avg</span>
+          </div>
+        </div>"""
+    else:
+        wildest_block = '<p class="empty">No 1-day data.</p>'
+
+    tracked = stats.get("tracked", 0)
+    gainers = stats.get("gainer_count", 0)
+    losers = stats.get("loser_count", 0)
+    gain_share = (gainers / tracked * 100) if tracked else 0
+
+    return f"""
+      <aside class="side">
+        <section class="panel">
+          <h2>Priciest Pikachu</h2>
+          {priciest_block}
+          <p class="panel-note">Highest TCGplayer market price of the {tracked} cards tracked.</p>
+        </section>
+
+        <section class="panel">
+          <h2>Wildest 24h swing</h2>
+          {wildest_block}
+          <p class="panel-note">The sharpest one-day move against the weekly average — a single sale can cause it.</p>
+        </section>
+
+        <section class="panel">
+          <h2>Market pulse</h2>
+          <div class="pulse">
+            <div class="pulse-bar">
+              <span class="pulse-up" style="width:{gain_share:.1f}%"></span>
+            </div>
+            <div class="pulse-legend">
+              <span><b class="up">{gainers}</b> rising</span>
+              <span><b class="down">{losers}</b> falling</span>
+            </div>
+          </div>
+          <p class="panel-note">Across {tracked} Pikachu cards with usable Cardmarket pricing
+          ({stats.get('skipped', 0)} skipped for missing data or a sub-€1 average).</p>
+        </section>
+      </aside>"""
+
+
+def render_html_report(data):
+    """Render the Pikachu price board as a self-contained HTML page.
+
+    `data` is the dict returned by get_gainers_and_losers(): gainers, losers
+    and summary stats. Written straight to docs/index.html for GitHub Pages.
     """
+    gainers = data["gainers"]
+    losers = data["losers"]
+    stats = data.get("stats", {})
+
     generated_at = datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC")
-
-    max_abs_pct = max((abs(c["pct_change_month"]) for c in movers), default=0)
-    gainers = [c for c in movers if c["pct_change_month"] >= 0]
-    droppers = [c for c in movers if c["pct_change_month"] < 0]
-    top_gain = max((c["pct_change_month"] for c in gainers), default=None)
-    top_drop = min((c["pct_change_month"] for c in droppers), default=None)
-
-    tiles = "".join(
-        _card_tile_html(rank, card, max_abs_pct)
-        for rank, card in enumerate(movers, start=1)
-    )
+    top_gain = gainers[0]["pct_change_month"] if gainers else None
+    top_loss = losers[0]["pct_change_month"] if losers else None
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -362,21 +594,23 @@ def render_html_report(movers):
 <style>
   :root {{
     color-scheme: light;
-    --plane: #f9f9f7;
+    --plane: #f4f4f2;
     --surface: #fcfcfb;
     --ink: #0b0b0b;
     --ink-2: #52514e;
     --muted: #898781;
     --hairline: rgba(11,11,11,0.10);
+    --row-hover: rgba(11,11,11,0.035);
     --up: #006300;
     --up-mark: #0ca30c;
-    --down: #d03b3b;
+    --up-wash: rgba(12,163,12,0.12);
+    --down: #c22a2a;
     --down-mark: #d03b3b;
+    --down-wash: rgba(208,59,59,0.12);
     --accent: #f6c945;
     --accent-ink: #3a2f00;
-    --shadow: 0 1px 2px rgba(11,11,11,0.06), 0 8px 24px rgba(11,11,11,0.06);
-    --hover-shadow: 0 6px 12px rgba(11,11,11,0.10), 0 18px 40px rgba(11,11,11,0.10);
     --chip: rgba(137,135,129,0.16);
+    --shadow: 0 1px 2px rgba(11,11,11,0.05), 0 6px 20px rgba(11,11,11,0.06);
   }}
   @media (prefers-color-scheme: dark) {{
     :root:not([data-theme="light"]) {{
@@ -387,174 +621,193 @@ def render_html_report(movers):
       --ink-2: #c3c2b7;
       --muted: #898781;
       --hairline: rgba(255,255,255,0.10);
-      --up: #0ca30c;
+      --row-hover: rgba(255,255,255,0.045);
+      --up: #23c723;
       --up-mark: #0ca30c;
-      --down: #e66767;
+      --up-wash: rgba(12,163,12,0.16);
+      --down: #ef7676;
       --down-mark: #d03b3b;
-      --shadow: 0 1px 2px rgba(0,0,0,0.40), 0 8px 24px rgba(0,0,0,0.35);
-      --hover-shadow: 0 6px 12px rgba(0,0,0,0.45), 0 18px 40px rgba(0,0,0,0.40);
+      --down-wash: rgba(208,59,59,0.18);
       --chip: rgba(195,194,183,0.14);
+      --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 6px 20px rgba(0,0,0,0.35);
     }}
   }}
 
   * {{ box-sizing: border-box; }}
+  html, body {{ height: 100%; }}
   body {{
-    margin: 0;
-    background: var(--plane);
-    color: var(--ink);
+    margin: 0; background: var(--plane); color: var(--ink);
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    line-height: 1.45;
+    font-size: 14px; line-height: 1.4;
   }}
-  .wrap {{ max-width: 1100px; margin: 0 auto; padding: 40px 20px 64px; }}
+  .wrap {{
+    max-width: 1240px; min-height: 100%; margin: 0 auto;
+    padding: 26px 24px 20px; display: flex; flex-direction: column; gap: 16px;
+  }}
 
-  /* ---- header ---- */
-  .hero {{
-    display: flex; flex-wrap: wrap; gap: 20px;
-    align-items: flex-end; justify-content: space-between;
-    padding-bottom: 24px; margin-bottom: 28px;
-    border-bottom: 1px solid var(--hairline);
+  /* ---------- header ---------- */
+  .head {{ display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }}
+  .head h1 {{ margin: 0; font-size: 27px; letter-spacing: -0.02em; }}
+  .head p {{ margin: 4px 0 0; color: var(--ink-2); font-size: 13px; max-width: 56ch; }}
+  .bolt {{ color: var(--accent); }}
+  .head-stats {{ display: flex; gap: 8px; align-items: stretch; }}
+  .kpi {{
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px;
+    padding: 8px 13px; min-width: 96px; box-shadow: var(--shadow);
   }}
-  .title-block h1 {{
-    margin: 0; font-size: clamp(28px, 5vw, 42px); letter-spacing: -0.02em; line-height: 1.1;
-  }}
-  .spark {{
-    display: inline-block; background: var(--accent); color: var(--accent-ink);
-    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-    padding: 4px 9px; border-radius: 999px; margin-bottom: 10px;
-  }}
-  .title-block p {{ margin: 8px 0 0; color: var(--ink-2); font-size: 14px; max-width: 46ch; }}
-  .stamp {{ color: var(--muted); font-size: 12px; }}
+  .kpi span {{ display: block; font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }}
+  .kpi b {{ font-size: 18px; font-weight: 680; font-variant-numeric: tabular-nums; }}
+  .kpi.stamp b {{ font-size: 12.5px; font-weight: 560; color: var(--ink-2); }}
 
-  .summary {{ display: flex; gap: 10px; flex-wrap: wrap; margin: 0; }}
-  .stat {{
+  /* ---------- layout ---------- */
+  .main {{ display: grid; grid-template-columns: minmax(0,1fr) 268px; gap: 16px; flex: 1; align-items: start; }}
+  .board-card {{
     background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
-    padding: 10px 14px; min-width: 104px; box-shadow: var(--shadow);
-  }}
-  .stat dt {{ font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 2px; }}
-  .stat dd {{ margin: 0; font-size: 19px; font-weight: 650; }}
-  .stat dd.up {{ color: var(--up); }}
-  .stat dd.down {{ color: var(--down); }}
-
-  /* ---- grid ---- */
-  .grid {{
-    display: grid; gap: 16px;
-    grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
-  }}
-  .tile {{
-    position: relative; display: flex; flex-direction: column;
-    background: var(--surface); border: 1px solid var(--hairline);
-    border-radius: 14px; overflow: hidden; box-shadow: var(--shadow);
-    transition: transform .15s ease, box-shadow .15s ease;
-  }}
-  .tile:hover {{ transform: translateY(-3px); box-shadow: var(--hover-shadow); }}
-  @media (prefers-reduced-motion: reduce) {{
-    .tile {{ transition: none; }}
-    .tile:hover {{ transform: none; }}
-  }}
-  .tile-rank {{
-    position: absolute; top: 10px; left: 10px; z-index: 2;
-    width: 26px; height: 26px; border-radius: 50%;
-    background: var(--ink); color: var(--surface);
-    font-size: 13px; font-weight: 700;
-    display: grid; place-items: center;
-    font-variant-numeric: tabular-nums;
-  }}
-  .art-frame {{
-    padding: 18px 18px 6px; display: grid; place-items: center;
-    background: linear-gradient(160deg, rgba(246,201,69,0.16), transparent 62%);
-  }}
-  .art {{
-    width: 100%; max-width: 168px; border-radius: 8px; display: block;
-    aspect-ratio: 245/342; object-fit: contain;
-  }}
-  .art-missing {{
-    width: 100%; max-width: 168px; aspect-ratio: 245/342; border-radius: 8px;
-    border: 1px dashed var(--hairline); color: var(--muted);
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
-    background: var(--chip); text-align: center;
-  }}
-  .art-missing-bolt {{ font-size: 26px; opacity: .5; }}
-  .art-missing-label {{ font-size: 11px; line-height: 1.3; }}
-  .tile-body {{ padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 10px; flex: 1; }}
-
-  .set {{ margin: 0; font-size: 15px; font-weight: 620; letter-spacing: -0.01em; line-height: 1.25; }}
-  .meta {{
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 3px;
-    font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
-  }}
-  .variant {{
-    background: var(--chip); color: var(--ink-2);
-    padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600;
-  }}
-  .badge-new {{
-    background: var(--accent); color: var(--accent-ink);
-    padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: 0.04em;
+    box-shadow: var(--shadow); overflow: hidden; height: 100%;
+    display: flex; flex-direction: column;
   }}
 
-  .move {{ display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }}
-  .pct {{ font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }}
-  .window {{ font-size: 11px; color: var(--muted); }}
-  .tile.up .pct {{ color: var(--up); }}
-  .tile.down .pct {{ color: var(--down); }}
-
-  .bar-track {{ position: relative; height: 6px; background: var(--chip); border-radius: 999px; }}
-  .bar-zero {{ position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--hairline); }}
-  .bar-fill {{ position: absolute; top: 0; bottom: 0; border-radius: 999px; }}
-  .tile.up .bar-fill {{ background: var(--up-mark); }}
-  .tile.down .bar-fill {{ background: var(--down-mark); }}
-
-  .stats {{
-    display: flex; gap: 18px; margin: auto 0 0; padding-top: 10px;
-    border-top: 1px solid var(--hairline);
+  /* ---------- tabs (CSS-only) ---------- */
+  .tabin {{ position: absolute; opacity: 0; pointer-events: none; }}
+  .tabs {{ display: flex; gap: 4px; padding: 10px 12px 0; border-bottom: 1px solid var(--hairline); }}
+  .tabs label {{
+    padding: 8px 14px; border-radius: 8px 8px 0 0; cursor: pointer;
+    font-size: 13px; font-weight: 620; color: var(--muted);
+    border: 1px solid transparent; border-bottom: none; margin-bottom: -1px;
   }}
-  .stats div {{ display: flex; flex-direction: column; }}
-  .stats dt {{ font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1px; }}
-  .stats dd {{ margin: 0; font-size: 15px; font-weight: 620; font-variant-numeric: tabular-nums; }}
-  .stats .pct24 {{ color: var(--ink-2); font-size: 13px; font-weight: 550; }}
-
-  /* ---- footer ---- */
-  .notes {{
-    margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--hairline);
-    color: var(--muted); font-size: 12.5px; line-height: 1.6; max-width: 78ch;
+  .tabs label:hover {{ color: var(--ink); background: var(--row-hover); }}
+  .panel-body {{ display: none; flex: 1; min-height: 0; }}
+  #t-gain:checked ~ .tabs label[for="t-gain"],
+  #t-lose:checked ~ .tabs label[for="t-lose"] {{
+    color: var(--ink); background: var(--surface);
+    border-color: var(--hairline); border-bottom: 1px solid var(--surface);
   }}
-  .notes strong {{ color: var(--ink-2); }}
-  .notes p {{ margin: 0 0 8px; }}
-  .notes a {{ color: inherit; }}
+  #t-gain:checked ~ .body-gain, #t-lose:checked ~ .body-lose {{ display: block; }}
+  .tabin:focus-visible ~ .tabs label[for="t-gain"],
+  .tabin:focus-visible ~ .tabs label[for="t-lose"] {{ outline: 2px solid var(--accent); outline-offset: -2px; }}
+
+  /* ---------- table ---------- */
+  /* height:100% lets the five rows share out the leftover vertical space, so
+     the board fills the page instead of leaving a gap under a short list. */
+  .board {{ width: 100%; height: 100%; border-collapse: collapse; }}
+  .board th {{
+    text-align: left; padding: 9px 16px; font-size: 10px; font-weight: 620;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+    border-bottom: 1px solid var(--hairline); white-space: nowrap;
+    height: 34px;
+  }}
+  .board td {{ padding: 10px 16px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }}
+  .board tbody tr {{ height: 76px; }}
+  .board tbody tr:last-child td {{ border-bottom: none; }}
+  .board tbody tr:hover {{ background: var(--row-hover); }}
+  .c-num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+  .c-rank {{ width: 30px; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }}
+  .c-spark {{ width: 88px; }}
+  .spark {{ display: block; }}
+
+  .c-card {{ min-width: 0; }}
+  /* the flex lives on an inner span, not the td -- a flex td drops out of
+     table layout and the row borders stop lining up */
+  .c-card .cell {{ display: flex; align-items: center; gap: 12px; }}
+  .thumb {{
+    width: 50px; height: 70px; object-fit: contain; border-radius: 5px;
+    background: var(--chip); flex: none;
+  }}
+  .thumb-empty {{ display: grid; place-items: center; font-size: 18px; opacity: .5; }}
+  .card-id {{ display: flex; flex-direction: column; min-width: 0; }}
+  .card-set {{ font-weight: 620; font-size: 15px; letter-spacing: -0.01em; }}
+  .card-sub {{ font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 5px; margin-top: 1px; font-variant-numeric: tabular-nums; }}
+  .chip {{ background: var(--chip); color: var(--ink-2); padding: 0 6px; border-radius: 999px; font-size: 10.5px; font-weight: 600; }}
+  .chip-new {{ background: var(--accent); color: var(--accent-ink); font-weight: 800; letter-spacing: 0.03em; }}
+
+  .c-price {{ font-weight: 620; font-size: 15.5px; }}
+  .c-change {{ color: var(--ink-2); font-size: 13.5px; }}
+  tr.up .c-change {{ color: var(--up); }}
+  tr.down .c-change {{ color: var(--down); }}
+  .c-24h {{ color: var(--muted); font-size: 13px; }}
+  .pill {{
+    display: inline-block; padding: 4px 10px; border-radius: 6px;
+    font-weight: 680; font-size: 14px; font-variant-numeric: tabular-nums;
+  }}
+  .pill.up {{ background: var(--up-wash); color: var(--up); }}
+  .pill.down {{ background: var(--down-wash); color: var(--down); }}
+
+  /* ---------- sidebar ---------- */
+  .side {{ display: flex; flex-direction: column; gap: 12px; }}
+  .panel {{
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 13px 14px; box-shadow: var(--shadow);
+  }}
+  .panel h2 {{ margin: 0 0 10px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }}
+  .feature {{ display: flex; gap: 11px; align-items: center; }}
+  .feature .thumb {{ width: 44px; height: 61px; }}
+  .feature-text {{ display: flex; flex-direction: column; min-width: 0; }}
+  .feature-value {{ font-size: 20px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }}
+  .feature-value.up {{ color: var(--up); }}
+  .feature-value.down {{ color: var(--down); }}
+  .feature-name {{ font-size: 12.5px; font-weight: 600; margin-top: 1px; }}
+  .feature-sub {{ font-size: 11px; color: var(--muted); }}
+  .panel-note {{ margin: 9px 0 0; font-size: 10.5px; line-height: 1.45; color: var(--muted); }}
+
+  .pulse-bar {{ height: 7px; border-radius: 999px; background: var(--down-mark); overflow: hidden; }}
+  .pulse-up {{ display: block; height: 100%; background: var(--up-mark); }}
+  .pulse-legend {{ display: flex; justify-content: space-between; margin-top: 7px; font-size: 12px; color: var(--ink-2); }}
+  .pulse-legend b {{ font-variant-numeric: tabular-nums; }}
+  b.up {{ color: var(--up); }} b.down {{ color: var(--down); }}
+
+  .empty {{ color: var(--muted); font-size: 12.5px; margin: 4px 0; }}
+
+  /* ---------- footer ---------- */
+  .foot {{ color: var(--muted); font-size: 10.5px; line-height: 1.5; margin: 0; }}
+  .foot a {{ color: inherit; }}
+
+  @media (max-width: 900px) {{
+    .main {{ grid-template-columns: 1fr; }}
+    .side {{ flex-direction: row; flex-wrap: wrap; }}
+    .side .panel {{ flex: 1 1 220px; }}
+    .c-spark, .c-24h, th.c-spark, th.c-num:last-child {{ display: none; }}
+  }}
+  @media (max-width: 560px) {{
+    .c-change, .board th:nth-child(5) {{ display: none; }}
+    .head h1 {{ font-size: 22px; }}
+  }}
 </style>
 </head>
 <body>
   <div class="wrap">
-    <header class="hero">
-      <div class="title-block">
-        <span class="spark">⚡ Top 10 movers</span>
-        <h1>Pikachu Card Prices</h1>
-        <p>The Pikachu cards that moved the most over the past month, ranked by the size of the move &mdash; gains and drops together.</p>
-      </div>
+    <header class="head">
       <div>
-        <dl class="summary">
-          <div class="stat"><dt>Biggest gain</dt><dd class="up">{_fmt_pct(top_gain)}</dd></div>
-          <div class="stat"><dt>Biggest drop</dt><dd class="down">{_fmt_pct(top_drop)}</dd></div>
-          <div class="stat"><dt>Gainers</dt><dd>{len(gainers)}<span style="font-size:13px;color:var(--muted)"> / {len(movers)}</span></dd></div>
-        </dl>
-        <p class="stamp" style="margin:10px 0 0">Updated {generated_at}</p>
+        <h1><span class="bolt">⚡</span> Pikachu Card Prices</h1>
+        <p>The Pikachu cards moving most on Cardmarket over the past month — biggest risers and biggest fallers, updated weekly.</p>
+      </div>
+      <div class="head-stats">
+        <div class="kpi"><span>Biggest gain</span><b class="up">{_fmt_pct(top_gain)}</b></div>
+        <div class="kpi"><span>Biggest drop</span><b class="down">{_fmt_pct(top_loss)}</b></div>
+        <div class="kpi stamp"><span>Last updated</span><b>{generated_at}</b></div>
       </div>
     </header>
 
-    <main class="grid">{tiles}</main>
+    <div class="main">
+      <div class="board-card">
+        <input class="tabin" type="radio" name="board" id="t-gain" checked>
+        <input class="tabin" type="radio" name="board" id="t-lose">
+        <div class="tabs">
+          <label for="t-gain">Top gainers</label>
+          <label for="t-lose">Top losers</label>
+        </div>
+        <div class="panel-body body-gain">{_table_html(gainers, "No cards gained this period.")}</div>
+        <div class="panel-body body-lose">{_table_html(losers, "No cards fell this period.")}</div>
+      </div>
 
-    <footer class="notes">
-      <p><strong>How the move is measured.</strong> Cardmarket publishes rolling trailing averages in EUR. The 30-day move is
-      (7-day average &minus; 30-day average) &divide; 30-day average &mdash; a moving-average crossover, not the price exactly
-      30 days ago. &ldquo;Last 24h&rdquo; is the same comparison against the 1-day average, which is a single day of sales and
-      much noisier.</p>
-      <p><strong>How the top 10 is chosen.</strong> By the size of the move on a log scale, so a halving and a doubling count
-      equally. A plain percentage ranking would be almost all gainers, because a drop can never exceed &minus;100% while a gain
-      has no ceiling. Cards averaging under &euro;1.00 are left out &mdash; a few cents of movement on a bulk common reads as a
-      triple-digit swing.</p>
-      <p><strong>Price</strong> is the TCGplayer market price in USD for the card&rsquo;s base printing, shown as a snapshot for
-      scale &mdash; the ranking is not based on it, and it is a different marketplace and currency from the EUR figures above.
-      Cards with no Cardmarket 7- or 30-day average are skipped rather than counted as flat. A <strong>NEW!</strong> badge marks
-      a set released in the last {NEW_CARD_WINDOW_DAYS} days. Data from <a href="https://tcgdex.dev/">TCGdex</a>.</p>
+      {_aside_html(stats)}
+    </div>
+
+    <footer class="foot">
+      <strong>Change</strong> is Cardmarket's 7-day average against its 30-day average, in EUR — a moving-average
+      crossover, not the price exactly 30 days ago. <strong>Price</strong> is the TCGplayer market price in USD for the
+      card's base printing, shown for scale only. <strong>Trend</strong> plots the 30-, 7- and 1-day averages.
+      Cards averaging under €1.00, or missing Cardmarket averages, are excluded. Data from
+      <a href="https://tcgdex.dev/">TCGdex</a>.
     </footer>
   </div>
 </body>

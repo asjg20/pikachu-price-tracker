@@ -5,19 +5,23 @@ unittest.mock.patch on pikachu_core.requests.get -- no real HTTP happens here.
 
 import datetime as dt
 import unittest
+import requests
 from unittest.mock import MagicMock, patch
 
 import pikachu_core
 
 
-def _response(json_data, status_ok=True):
+def _response(json_data, status_code=200):
     """Build a fake requests.Response-like object."""
     resp = MagicMock()
+    resp.status_code = status_code
     resp.json.return_value = json_data
-    if status_ok:
+    if status_code < 400:
         resp.raise_for_status.return_value = None
     else:
-        resp.raise_for_status.side_effect = Exception("HTTP error")
+        resp.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            f"{status_code}", response=resp
+        )
     return resp
 
 
@@ -105,7 +109,7 @@ class FetchCardPricingTests(unittest.TestCase):
         self.assertIsNotNone(card)
 
     @patch("pikachu_core.requests.get")
-    def test_usd_display_price_prefers_reverse_holofoil_over_others(self, mock_get):
+    def test_usd_display_price_prefers_base_printing_over_holo_variants(self, mock_get):
         mock_get.return_value = _response(_card_detail(
             cardmarket={"avg1": 10, "avg7": 10, "avg30": 10},
             tcgplayer={
@@ -301,55 +305,265 @@ class GetTopMoversTests(unittest.TestCase):
         self.assertEqual(top[0]["release_date"], recent_release)
 
 
+class GainersAndLosersTests(unittest.TestCase):
+    def setUp(self):
+        pikachu_core._set_release_date_cache.clear()
+
+    @staticmethod
+    def _wire(mock_get, cards):
+        """cards: list of (id, name, avg1, avg7, avg30)."""
+        list_response = _response([
+            {"id": cid, "localId": "1", "name": name} for cid, name, *_ in cards
+        ])
+        details = {
+            cid: _card_detail(name=name, set_id=f"set-{cid}", local_id="1",
+                              cardmarket={"avg1": a1, "avg7": a7, "avg30": a30},
+                              tcgplayer={"normal": {"marketPrice": a30}})
+            for cid, name, a1, a7, a30 in cards
+        }
+        set_response = _response({"releaseDate": "2020-01-01"})
+
+        def side_effect(url, *args, **kwargs):
+            if url.endswith("/cards"):
+                return list_response
+            if "/sets/" in url:
+                return set_response
+            return _response(details[url.rsplit("/", 1)[-1]])
+
+        mock_get.side_effect = side_effect
+
+    @patch("pikachu_core.time.sleep", return_value=None)
+    @patch("pikachu_core.requests.get")
+    def test_splits_directions_and_sorts_each_by_percent(self, mock_get, mock_sleep):
+        self._wire(mock_get, [
+            ("big-up", "Pikachu A", 20, 20, 10),      # +100%
+            ("small-up", "Pikachu B", 11, 11, 10),    # +10%
+            ("small-down", "Pikachu C", 9, 9, 10),    # -10%
+            ("big-down", "Pikachu D", 5, 5, 10),      # -50%
+        ])
+        data = pikachu_core.get_gainers_and_losers(n=2)
+
+        self.assertEqual([c["id"] for c in data["gainers"]], ["big-up", "small-up"])
+        self.assertEqual([c["id"] for c in data["losers"]], ["big-down", "small-down"])
+        # Signs are preserved on each side.
+        self.assertTrue(all(c["pct_change_month"] > 0 for c in data["gainers"]))
+        self.assertTrue(all(c["pct_change_month"] < 0 for c in data["losers"]))
+
+    @patch("pikachu_core.time.sleep", return_value=None)
+    @patch("pikachu_core.requests.get")
+    def test_flat_cards_appear_in_neither_list(self, mock_get, mock_sleep):
+        self._wire(mock_get, [
+            ("up", "Pikachu A", 12, 12, 10),
+            ("flat", "Pikachu B", 10, 10, 10),
+        ])
+        data = pikachu_core.get_gainers_and_losers(n=5)
+        self.assertEqual([c["id"] for c in data["gainers"]], ["up"])
+        self.assertEqual(data["losers"], [])
+
+    @patch("pikachu_core.time.sleep", return_value=None)
+    @patch("pikachu_core.requests.get")
+    def test_stats_report_counts_and_priciest_card(self, mock_get, mock_sleep):
+        self._wire(mock_get, [
+            ("up", "Pikachu A", 12, 12, 10),
+            ("down", "Pikachu B", 5, 5, 100),   # priciest by avg30 -> marketPrice 100
+        ])
+        stats = pikachu_core.get_gainers_and_losers(n=5)["stats"]
+        self.assertEqual(stats["tracked"], 2)
+        self.assertEqual(stats["gainer_count"], 1)
+        self.assertEqual(stats["loser_count"], 1)
+        self.assertEqual(stats["priciest"]["id"], "down")
+
+    @patch("pikachu_core.time.sleep", return_value=None)
+    @patch("pikachu_core.requests.get")
+    def test_wildest_24h_swing_picks_largest_one_day_gap(self, mock_get, mock_sleep):
+        self._wire(mock_get, [
+            ("calm", "Pikachu A", 10.1, 10, 10),
+            ("wild", "Pikachu B", 30, 10, 10),   # 1-day avg triple the weekly
+        ])
+        wildest = pikachu_core.get_gainers_and_losers(n=5)["stats"]["wildest_24h"]
+        self.assertEqual(wildest["card"]["id"], "wild")
+        self.assertAlmostEqual(wildest["swing_pct"], 200.0)
+
+
 class RenderHtmlReportTests(unittest.TestCase):
     @staticmethod
-    def _movers():
-        return [
-            {"name": "Pikachu", "variant_label": "", "set": "Set A", "local_id": "1",
-             "image_url": "https://assets.tcgdex.net/en/x/y/1/high.webp",
-             "pct_change_month": 42.0, "pct_change_24h": 10.0,
-             "usd_display_price": 9.99, "usd_price_variant": "normal",
-             "avg7_eur": 14.2, "avg30_eur": 10.0, "is_new": False},
-            {"name": "Ash's Pikachu", "variant_label": "Ash's", "set": "Set B", "local_id": "2",
-             "image_url": None,
-             "pct_change_month": -30.0, "pct_change_24h": None,
-             "usd_display_price": None, "usd_price_variant": None,
-             "avg7_eur": 7.0, "avg30_eur": 10.0, "is_new": True},
-        ]
+    def _card(**overrides):
+        card = {
+            "id": "x-1", "name": "Pikachu", "variant_label": "", "set": "Set A",
+            "local_id": "1", "image_url": "https://assets.tcgdex.net/en/x/y/1/high.webp",
+            "pct_change_month": 42.0, "pct_change_24h": 10.0, "change_eur": 4.2,
+            "usd_display_price": 9.99, "usd_price_variant": "normal",
+            "avg1_eur": 15.0, "avg7_eur": 14.2, "avg30_eur": 10.0, "is_new": False,
+        }
+        card.update(overrides)
+        return card
 
-    def test_gainers_and_droppers_are_visually_distinguished(self):
-        report = pikachu_core.render_html_report(self._movers())
-        self.assertIn('class="tile up"', report)
-        self.assertIn('class="tile down"', report)
+    def _data(self):
+        gainer = self._card()
+        loser = self._card(
+            id="y-2", name="Ash's Pikachu", variant_label="Ash's", set="Set B",
+            local_id="2", image_url=None, pct_change_month=-30.0,
+            pct_change_24h=None, change_eur=-3.0, usd_display_price=None,
+            usd_price_variant=None, avg1_eur=None, avg7_eur=7.0, is_new=True,
+        )
+        return {
+            "gainers": [gainer],
+            "losers": [loser],
+            "stats": {
+                "tracked": 157, "skipped": 50, "gainer_count": 74, "loser_count": 83,
+                "priciest": self._card(set="Rich Set", usd_display_price=4100.0),
+                "wildest_24h": {"card": self._card(set="Wild Set"), "swing_pct": 212.0},
+            },
+        }
+
+    def test_renders_both_tabs_with_their_rows(self):
+        report = pikachu_core.render_html_report(self._data())
+        self.assertIn("Top gainers", report)
+        self.assertIn("Top losers", report)
         self.assertIn("+42.0%", report)
         self.assertIn("-30.0%", report)
-        self.assertIn("NEW!", report)
 
-    def test_card_art_is_rendered_with_graceful_fallback(self):
-        report = pikachu_core.render_html_report(self._movers())
-        self.assertIn('src="https://assets.tcgdex.net/en/x/y/1/high.webp"', report)
-        self.assertIn("art-missing", report)  # second card has no image
+    def test_gainers_and_losers_are_distinguished_beyond_colour(self):
+        report = pikachu_core.render_html_report(self._data())
+        self.assertIn('<tr class="up"', report)
+        self.assertIn('<tr class="down"', report)
+        self.assertIn("▲", report)
+        self.assertIn("▼", report)
 
-    def test_set_is_the_headline_and_redundant_pikachu_is_dropped(self):
-        report = pikachu_core.render_html_report(self._movers())
-        self.assertIn("<h2 class=\"set\">Set A</h2>", report)
-        # "Ash's" survives as the distinguishing chip; bare "Pikachu" does not
-        # appear as a card heading anywhere.
-        self.assertIn(">Ash&#x27;s<", report)
-        self.assertNotIn("<h2 class=\"set\">Pikachu</h2>", report)
-
-    def test_price_column_is_labelled_price_not_usd_ref(self):
-        report = pikachu_core.render_html_report(self._movers())
-        self.assertIn("<dt>Price</dt>", report)
-        self.assertNotIn("USD ref", report)
-
-    def test_title_is_natural(self):
-        report = pikachu_core.render_html_report(self._movers())
+    def test_header_carries_title_kpis_and_timestamp(self):
+        report = pikachu_core.render_html_report(self._data())
         self.assertIn("<title>Pikachu Card Prices</title>", report)
+        self.assertIn("Biggest gain", report)
+        self.assertIn("Biggest drop", report)
+        self.assertIn("Last updated", report)
 
-    def test_handles_empty_mover_list_without_crashing(self):
-        report = pikachu_core.render_html_report([])
+    def test_sidebar_shows_priciest_and_wildest_swing(self):
+        report = pikachu_core.render_html_report(self._data())
+        self.assertIn("Priciest Pikachu", report)
+        self.assertIn("$4,100.00", report)
+        self.assertIn("Wildest 24h swing", report)
+        self.assertIn("+212%", report)
+        self.assertIn("Market pulse", report)
+
+    def test_price_column_is_plain_price_and_set_is_the_headline(self):
+        report = pikachu_core.render_html_report(self._data())
+        self.assertIn(">Price<", report)
+        self.assertNotIn("USD ref", report)
+        self.assertIn('class="card-set">Set A<', report)
+        self.assertIn(">Ash&#x27;s<", report)
+
+    def test_sparkline_handles_missing_one_day_average(self):
+        # The loser fixture has avg1_eur=None: two points, not a crash.
+        report = pikachu_core.render_html_report(self._data())
+        self.assertEqual(report.count("<svg class=\"spark\""), 2)
+
+    def test_empty_lists_render_without_crashing(self):
+        report = pikachu_core.render_html_report({
+            "gainers": [], "losers": [],
+            "stats": {"tracked": 0, "skipped": 0, "gainer_count": 0,
+                      "loser_count": 0, "priciest": None, "wildest_24h": None},
+        })
         self.assertIn("Pikachu Card Prices", report)
+        self.assertIn("No cards gained this period.", report)
+
+
+class TransientFailureTests(unittest.TestCase):
+    """The weekly workflow runs unattended, so a blip must not kill the run."""
+
+    def setUp(self):
+        pikachu_core._set_release_date_cache.clear()
+
+    @staticmethod
+    def _error_response(status):
+        resp = MagicMock()
+        resp.status_code = status
+        http_error = requests.exceptions.HTTPError(f"{status}", response=resp)
+        resp.raise_for_status.side_effect = http_error
+        return resp
+
+    @patch("pikachu_core.time.sleep", return_value=None)
+    @patch("pikachu_core.requests.get")
+    def test_retries_a_transient_5xx_then_succeeds(self, mock_get, mock_sleep):
+        ok = _response({"releaseDate": "2020-01-01"})
+        mock_get.side_effect = [self._error_response(503), ok]
+
+        result = pikachu_core._get_json("https://example.test/sets/x")
+
+        self.assertEqual(result, {"releaseDate": "2020-01-01"})
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch("pikachu_core.time.sleep", return_value=None)
+    @patch("pikachu_core.requests.get")
+    def test_gives_up_after_max_retries(self, mock_get, mock_sleep):
+        mock_get.side_effect = [self._error_response(503)] * pikachu_core.MAX_RETRIES
+
+        with self.assertRaises(requests.exceptions.HTTPError):
+            pikachu_core._get_json("https://example.test/sets/x")
+
+        self.assertEqual(mock_get.call_count, pikachu_core.MAX_RETRIES)
+
+    @patch("pikachu_core.time.sleep", return_value=None)
+    @patch("pikachu_core.requests.get")
+    def test_does_not_retry_a_404(self, mock_get, mock_sleep):
+        mock_get.side_effect = [self._error_response(404)]
+
+        with self.assertRaises(requests.exceptions.HTTPError):
+            pikachu_core._get_json("https://example.test/cards/nope")
+
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("pikachu_core.time.sleep", return_value=None)
+    @patch("pikachu_core.requests.get")
+    def test_failed_release_lookup_does_not_sink_the_report(self, mock_get, mock_sleep):
+        # Every /sets/ call fails; the card must still come back, unbadged.
+        def side_effect(url, *args, **kwargs):
+            if "/sets/" in url:
+                raise requests.exceptions.ConnectionError("boom")
+            raise AssertionError(f"unexpected call to {url}")
+
+        mock_get.side_effect = side_effect
+
+        cards = pikachu_core._add_new_badges([{"set_id": "ru1", "name": "Pikachu"}])
+
+        self.assertIs(cards[0]["is_new"], False)
+        self.assertIsNone(cards[0]["release_date"])
+
+
+class DedupeByProductTests(unittest.TestCase):
+    """TCGdex lists some physical cards under several ids that share one
+    Cardmarket product, producing identical duplicate rows."""
+
+    def test_duplicate_products_collapse_to_one_entry(self):
+        cards = [
+            {"id": "xyp-XY95", "cm_product_id": 289809,
+             "usd_display_price": None, "image_url": "img"},
+            {"id": "xyp-XY202", "cm_product_id": 289809,
+             "usd_display_price": None, "image_url": "img"},
+        ]
+        result = pikachu_core._dedupe_by_product(cards)
+        self.assertEqual(len(result), 1)
+
+    def test_keeps_the_more_complete_record(self):
+        sparse = {"id": "a", "cm_product_id": 1, "usd_display_price": None, "image_url": None}
+        rich = {"id": "b", "cm_product_id": 1, "usd_display_price": 9.99, "image_url": "img"}
+        for order in ([sparse, rich], [rich, sparse]):
+            with self.subTest(order=[c["id"] for c in order]):
+                result = pikachu_core._dedupe_by_product(order)
+                self.assertEqual([c["id"] for c in result], ["b"])
+
+    def test_distinct_products_are_all_kept(self):
+        cards = [
+            {"id": "a", "cm_product_id": 1, "usd_display_price": 1, "image_url": None},
+            {"id": "b", "cm_product_id": 2, "usd_display_price": 2, "image_url": None},
+        ]
+        self.assertEqual(len(pikachu_core._dedupe_by_product(cards)), 2)
+
+    def test_cards_without_a_product_id_are_never_merged(self):
+        cards = [
+            {"id": "a", "cm_product_id": None, "usd_display_price": None, "image_url": None},
+            {"id": "b", "cm_product_id": None, "usd_display_price": None, "image_url": None},
+        ]
+        self.assertEqual(len(pikachu_core._dedupe_by_product(cards)), 2)
 
 
 if __name__ == "__main__":
