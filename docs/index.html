@@ -115,8 +115,6 @@
   .board tbody tr:hover { background: var(--row-hover); }
   .c-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .c-rank { width: 30px; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
-  .c-spark { width: 88px; }
-  .spark { display: block; }
 
   .c-card { min-width: 0; }
   /* the flex lives on an inner span, not the td -- a flex td drops out of
@@ -133,14 +131,13 @@
   .chip { background: var(--chip); color: var(--ink-2); padding: 0 6px; border-radius: 999px; font-size: 10.5px; font-weight: 600; }
   .chip-new { background: var(--accent); color: var(--accent-ink); font-weight: 800; letter-spacing: 0.03em; }
 
-  .c-price { font-weight: 620; font-size: 15.5px; }
-  .c-change { color: var(--ink-2); font-size: 13.5px; }
-  tr.up .c-change { color: var(--up); }
-  tr.down .c-change { color: var(--down); }
-  .c-24h { color: var(--muted); font-size: 13px; }
+  /* "A month ago" is deliberately quieter than "Price now" -- the eye should
+     land on today's price, with the old one as context beside it. */
+  .c-was { color: var(--muted); font-size: 14px; font-weight: 500; }
+  .c-now { font-weight: 680; font-size: 16.5px; }
   .pill {
-    display: inline-block; padding: 4px 10px; border-radius: 6px;
-    font-weight: 680; font-size: 14px; font-variant-numeric: tabular-nums;
+    display: inline-block; padding: 5px 11px; border-radius: 7px;
+    font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums;
   }
   .pill.up { background: var(--up-wash); color: var(--up); }
   .pill.down { background: var(--down-wash); color: var(--down); }
@@ -152,15 +149,16 @@
     padding: 13px 14px; box-shadow: var(--shadow);
   }
   .panel h2 { margin: 0 0 10px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
-  .feature { display: flex; gap: 11px; align-items: center; }
-  .feature .thumb { width: 44px; height: 61px; }
+  .panel-hero { padding: 15px 16px 14px; }
+  .feature { display: flex; gap: 14px; align-items: center; }
+  .feature .thumb { width: 78px; height: 109px; border-radius: 6px; }
   .feature-text { display: flex; flex-direction: column; min-width: 0; }
-  .feature-value { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .feature-value { font-size: 30px; font-weight: 720; letter-spacing: -0.03em; line-height: 1.05; font-variant-numeric: tabular-nums; }
   .feature-value.up { color: var(--up); }
   .feature-value.down { color: var(--down); }
-  .feature-name { font-size: 12.5px; font-weight: 600; margin-top: 1px; }
-  .feature-sub { font-size: 11px; color: var(--muted); }
-  .panel-note { margin: 9px 0 0; font-size: 10.5px; line-height: 1.45; color: var(--muted); }
+  .feature-name { font-size: 14px; font-weight: 640; margin-top: 4px; }
+  .feature-sub { font-size: 12px; color: var(--muted); }
+  .panel-note { margin: 10px 0 0; font-size: 10.5px; line-height: 1.45; color: var(--muted); }
 
   .pulse-bar { height: 7px; border-radius: 999px; background: var(--down-mark); overflow: hidden; }
   .pulse-up { display: block; height: 100%; background: var(--up-mark); }
@@ -178,10 +176,10 @@
     .main { grid-template-columns: 1fr; }
     .side { flex-direction: row; flex-wrap: wrap; }
     .side .panel { flex: 1 1 220px; }
-    .c-spark, .c-24h, th.c-spark, th.c-num:last-child { display: none; }
+    .side .panel-hero { flex: 1 1 260px; }
   }
   @media (max-width: 560px) {
-    .c-change, .board th:nth-child(5) { display: none; }
+    .c-was, .board th:nth-child(3) { display: none; }
     .head h1 { font-size: 22px; }
   }
 </style>
@@ -191,12 +189,12 @@
     <header class="head">
       <div>
         <h1><span class="bolt">⚡</span> Pikachu Card Prices</h1>
-        <p>The Pikachu cards moving most on Cardmarket over the past month — biggest risers and biggest fallers, updated weekly.</p>
+        <p>The Pikachu cards that went up and down the most in the last month. All prices in euros, from Cardmarket.</p>
       </div>
       <div class="head-stats">
         <div class="kpi"><span>Biggest gain</span><b class="up">+155.8%</b></div>
         <div class="kpi"><span>Biggest drop</span><b class="down">-62.1%</b></div>
-        <div class="kpi stamp"><span>Last updated</span><b>10 Sep 2026, 04:18 UTC</b></div>
+        <div class="kpi stamp"><span>Last updated</span><b>10 Sep 2026, 04:36 UTC</b></div>
       </div>
     </header>
 
@@ -214,15 +212,13 @@
           <tr>
             <th class="c-rank">#</th>
             <th class="c-card">Card</th>
-            <th class="c-spark">Trend</th>
-            <th class="c-num">Price</th>
+            <th class="c-num">A month ago</th>
+            <th class="c-num">Price now</th>
             <th class="c-num">Change</th>
-            <th class="c-num">Change %</th>
-            <th class="c-num">24h</th>
           </tr>
         </thead>
         <tbody>
-        <tr class="up" title="Pikachu — 30-day avg €731.03 → 7-day avg €1869.99 · price is the holofoil printing">
+        <tr class="up" title="Pikachu — was €731.03 a month ago, now €1,869.99: up 155.8%">
           <td class="c-rank">1</td>
           <td class="c-card">
             <span class="cell">
@@ -233,13 +229,11 @@
               </span>
             </span>
           </td>
-          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,26.0 39.0,18.6 78.0,4.0" fill="none" stroke="var(--up-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="4.0" r="1.9" fill="var(--up-mark)"/></svg></td>
-          <td class="c-num c-price">$750.00</td>
-          <td class="c-num c-change">€1,138.96</td>
-          <td class="c-num c-pct"><span class="pill up">▲ +155.8%</span></td>
-          <td class="c-num c-24h">+460.9%</td>
+          <td class="c-num c-was">€731.03</td>
+          <td class="c-num c-now">€1,869.99</td>
+          <td class="c-num c-pct"><span class="pill up">▲ 155.8%</span></td>
         </tr>
-        <tr class="up" title="Pikachu δ — 30-day avg €44.17 → 7-day avg €102.71 · price is the normal printing">
+        <tr class="up" title="Pikachu δ — was €44.17 a month ago, now €102.71: up 132.5%">
           <td class="c-rank">2</td>
           <td class="c-card">
             <span class="cell">
@@ -250,13 +244,11 @@
               </span>
             </span>
           </td>
-          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,26.0 39.0,22.4 78.0,4.0" fill="none" stroke="var(--up-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="4.0" r="1.9" fill="var(--up-mark)"/></svg></td>
-          <td class="c-num c-price">$52.62</td>
-          <td class="c-num c-change">€58.54</td>
-          <td class="c-num c-pct"><span class="pill up">▲ +132.5%</span></td>
-          <td class="c-num c-24h">+803.3%</td>
+          <td class="c-num c-was">€44.17</td>
+          <td class="c-num c-now">€102.71</td>
+          <td class="c-num c-pct"><span class="pill up">▲ 132.5%</span></td>
         </tr>
-        <tr class="up" title="Special Delivery Pikachu — 30-day avg €673.39 → 7-day avg €1511.93 · price is the holofoil printing">
+        <tr class="up" title="Special Delivery Pikachu — was €673.39 a month ago, now €1,511.93: up 124.5%">
           <td class="c-rank">3</td>
           <td class="c-card">
             <span class="cell">
@@ -267,13 +259,11 @@
               </span>
             </span>
           </td>
-          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,26.0 39.0,4.0 78.0,25.6" fill="none" stroke="var(--up-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="25.6" r="1.9" fill="var(--up-mark)"/></svg></td>
-          <td class="c-num c-price">$458.46</td>
-          <td class="c-num c-change">€838.54</td>
-          <td class="c-num c-pct"><span class="pill up">▲ +124.5%</span></td>
-          <td class="c-num c-24h">+2.5%</td>
+          <td class="c-num c-was">€673.39</td>
+          <td class="c-num c-now">€1,511.93</td>
+          <td class="c-num c-pct"><span class="pill up">▲ 124.5%</span></td>
         </tr>
-        <tr class="up" title="Pikachu — 30-day avg €12.97 → 7-day avg €28.71 · price is the holofoil printing">
+        <tr class="up" title="Pikachu — was €12.97 a month ago, now €28.71: up 121.4%">
           <td class="c-rank">4</td>
           <td class="c-card">
             <span class="cell">
@@ -284,13 +274,11 @@
               </span>
             </span>
           </td>
-          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,26.0 39.0,4.0 78.0,9.2" fill="none" stroke="var(--up-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="9.2" r="1.9" fill="var(--up-mark)"/></svg></td>
-          <td class="c-num c-price">$32.46</td>
-          <td class="c-num c-change">€15.74</td>
-          <td class="c-num c-pct"><span class="pill up">▲ +121.4%</span></td>
-          <td class="c-num c-24h">+92.7%</td>
+          <td class="c-num c-was">€12.97</td>
+          <td class="c-num c-now">€28.71</td>
+          <td class="c-num c-pct"><span class="pill up">▲ 121.4%</span></td>
         </tr>
-        <tr class="up" title="Pikachu — 30-day avg €2.49 → 7-day avg €4.94 · price is the normal printing">
+        <tr class="up" title="Pikachu — was €2.49 a month ago, now €4.94: up 98.4%">
           <td class="c-rank">5</td>
           <td class="c-card">
             <span class="cell">
@@ -301,11 +289,9 @@
               </span>
             </span>
           </td>
-          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,18.9 39.0,4.0 78.0,26.0" fill="none" stroke="var(--up-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="26.0" r="1.9" fill="var(--up-mark)"/></svg></td>
-          <td class="c-num c-price">$2.28</td>
-          <td class="c-num c-change">€2.45</td>
-          <td class="c-num c-pct"><span class="pill up">▲ +98.4%</span></td>
-          <td class="c-num c-24h">-46.6%</td>
+          <td class="c-num c-was">€2.49</td>
+          <td class="c-num c-now">€4.94</td>
+          <td class="c-num c-pct"><span class="pill up">▲ 98.4%</span></td>
         </tr></tbody>
       </table></div>
         <div class="panel-body body-lose">
@@ -314,15 +300,13 @@
           <tr>
             <th class="c-rank">#</th>
             <th class="c-card">Card</th>
-            <th class="c-spark">Trend</th>
-            <th class="c-num">Price</th>
+            <th class="c-num">A month ago</th>
+            <th class="c-num">Price now</th>
             <th class="c-num">Change</th>
-            <th class="c-num">Change %</th>
-            <th class="c-num">24h</th>
           </tr>
         </thead>
         <tbody>
-        <tr class="down" title="Pikachu — 30-day avg €33.05 → 7-day avg €12.53 · price is the normal printing">
+        <tr class="down" title="Pikachu — was €33.05 a month ago, now €12.53: down 62.1%">
           <td class="c-rank">1</td>
           <td class="c-card">
             <span class="cell">
@@ -333,13 +317,11 @@
               </span>
             </span>
           </td>
-          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,4.0 39.0,19.8 78.0,26.0" fill="none" stroke="var(--down-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="26.0" r="1.9" fill="var(--down-mark)"/></svg></td>
-          <td class="c-num c-price">$6.38</td>
-          <td class="c-num c-change">€-20.52</td>
-          <td class="c-num c-pct"><span class="pill down">▼ -62.1%</span></td>
-          <td class="c-num c-24h">-86.4%</td>
+          <td class="c-num c-was">€33.05</td>
+          <td class="c-num c-now">€12.53</td>
+          <td class="c-num c-pct"><span class="pill down">▼ 62.1%</span></td>
         </tr>
-        <tr class="down" title="Pikachu — 30-day avg €5.14 → 7-day avg €3.21 · price is the normal printing">
+        <tr class="down" title="Pikachu — was €5.14 a month ago, now €3.21: down 37.5%">
           <td class="c-rank">2</td>
           <td class="c-card">
             <span class="cell">
@@ -350,13 +332,11 @@
               </span>
             </span>
           </td>
-          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,4.0 39.0,18.3 78.0,26.0" fill="none" stroke="var(--down-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="26.0" r="1.9" fill="var(--down-mark)"/></svg></td>
-          <td class="c-num c-price">$11.78</td>
-          <td class="c-num c-change">€-1.93</td>
-          <td class="c-num c-pct"><span class="pill down">▼ -37.5%</span></td>
-          <td class="c-num c-24h">-57.8%</td>
+          <td class="c-num c-was">€5.14</td>
+          <td class="c-num c-now">€3.21</td>
+          <td class="c-num c-pct"><span class="pill down">▼ 37.5%</span></td>
         </tr>
-        <tr class="down" title="Pikachu — 30-day avg €6.38 → 7-day avg €4.10 · price is the normal printing">
+        <tr class="down" title="Pikachu — was €6.38 a month ago, now €4.10: down 35.7%">
           <td class="c-rank">3</td>
           <td class="c-card">
             <span class="cell">
@@ -367,13 +347,11 @@
               </span>
             </span>
           </td>
-          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,4.0 39.0,16.9 78.0,26.0" fill="none" stroke="var(--down-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="26.0" r="1.9" fill="var(--down-mark)"/></svg></td>
-          <td class="c-num c-price">$19.96</td>
-          <td class="c-num c-change">€-2.28</td>
-          <td class="c-num c-pct"><span class="pill down">▼ -35.7%</span></td>
-          <td class="c-num c-24h">-60.8%</td>
+          <td class="c-num c-was">€6.38</td>
+          <td class="c-num c-now">€4.10</td>
+          <td class="c-num c-pct"><span class="pill down">▼ 35.7%</span></td>
         </tr>
-        <tr class="down" title="Pikachu — 30-day avg €65.42 → 7-day avg €43.46 · price is the no TCGplayer listing">
+        <tr class="down" title="Pikachu — was €65.42 a month ago, now €43.46: down 33.6%">
           <td class="c-rank">4</td>
           <td class="c-card">
             <span class="cell">
@@ -384,13 +362,11 @@
               </span>
             </span>
           </td>
-          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,4.0 39.0,14.6 78.0,26.0" fill="none" stroke="var(--down-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="26.0" r="1.9" fill="var(--down-mark)"/></svg></td>
-          <td class="c-num c-price">—</td>
-          <td class="c-num c-change">€-21.96</td>
-          <td class="c-num c-pct"><span class="pill down">▼ -33.6%</span></td>
-          <td class="c-num c-24h">-69.4%</td>
+          <td class="c-num c-was">€65.42</td>
+          <td class="c-num c-now">€43.46</td>
+          <td class="c-num c-pct"><span class="pill down">▼ 33.6%</span></td>
         </tr>
-        <tr class="down" title="Pikachu — 30-day avg €79.48 → 7-day avg €54.07 · price is the normal printing">
+        <tr class="down" title="Pikachu — was €79.48 a month ago, now €54.07: down 32.0%">
           <td class="c-rank">5</td>
           <td class="c-card">
             <span class="cell">
@@ -401,44 +377,42 @@
               </span>
             </span>
           </td>
-          <td class="c-spark"><svg class="spark" viewBox="0 0 78 30" width="78" height="30" aria-hidden="true" focusable="false"><polyline points="0.0,16.8 39.0,26.0 78.0,4.0" fill="none" stroke="var(--down-mark)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="78.0" cy="4.0" r="1.9" fill="var(--down-mark)"/></svg></td>
-          <td class="c-num c-price">$62.87</td>
-          <td class="c-num c-change">€-25.41</td>
-          <td class="c-num c-pct"><span class="pill down">▼ -32.0%</span></td>
-          <td class="c-num c-24h">+44.7%</td>
+          <td class="c-num c-was">€79.48</td>
+          <td class="c-num c-now">€54.07</td>
+          <td class="c-num c-pct"><span class="pill down">▼ 32.0%</span></td>
         </tr></tbody>
       </table></div>
       </div>
 
       
       <aside class="side">
-        <section class="panel">
+        <section class="panel panel-hero">
           <h2>Priciest Pikachu</h2>
           
         <div class="feature">
-          <img class="thumb" src="https://assets.tcgdex.net/en/me/me02.5/276/high.webp" loading="lazy" alt="Pikachu ex — Ascended Heroes">
+          <img class="thumb" src="https://assets.tcgdex.net/en/pl/ru1/7/high.webp" loading="lazy" alt="Pikachu — Pokémon Rumble">
           <div class="feature-text">
-            <span class="feature-value">$986.76</span>
-            <span class="feature-name">Ascended Heroes</span>
-            <span class="feature-sub">#276
-              ex</span>
+            <span class="feature-value">€1,869.99</span>
+            <span class="feature-name">Pokémon Rumble</span>
+            <span class="feature-sub">#7
+              </span>
           </div>
         </div>
-          <p class="panel-note">Highest TCGplayer market price of the 149 cards tracked.</p>
+          <p class="panel-note">The most expensive of the 149 cards tracked.</p>
         </section>
 
-        <section class="panel">
+        <section class="panel panel-hero">
           <h2>Wildest 24h swing</h2>
           
         <div class="feature">
           <img class="thumb" src="https://assets.tcgdex.net/en/bw/bw11/RC7/high.webp" loading="lazy" alt="Pikachu — Legendary Treasures">
           <div class="feature-text">
-            <span class="feature-value up">+322%</span>
+            <span class="feature-value up">322%</span>
             <span class="feature-name">Legendary Treasures</span>
-            <span class="feature-sub">1-day avg vs 7-day avg</span>
+            <span class="feature-sub">jumped in a day</span>
           </div>
         </div>
-          <p class="panel-note">The sharpest one-day move against the weekly average — a single sale can cause it.</p>
+          <p class="panel-note">The sharpest one-day move — a single sale can cause it.</p>
         </section>
 
         <section class="panel">
@@ -459,10 +433,10 @@
     </div>
 
     <footer class="foot">
-      <strong>Change</strong> is Cardmarket's 7-day average against its 30-day average, in EUR — a moving-average
-      crossover, not the price exactly 30 days ago. <strong>Price</strong> is the TCGplayer market price in USD for the
-      card's base printing, shown for scale only. <strong>Trend</strong> plots the 30-, 7- and 1-day averages.
-      Cards averaging under €1.00, or missing Cardmarket averages, are excluded. Data from
+      Every figure is a Cardmarket selling price in euros, so the three columns always agree:
+      <strong>a month ago</strong> is the 30-day average, <strong>price now</strong> is the 7-day average, and
+      <strong>change</strong> is the difference between them. Averages rather than single sales, so one odd listing
+      can't swing a card. Cards averaging under €1.00, or missing Cardmarket averages, are left out. Data from
       <a href="https://tcgdex.dev/">TCGdex</a>.
     </footer>
   </div>

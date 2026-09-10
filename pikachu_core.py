@@ -4,10 +4,16 @@ Core logic for the Pikachu Monthly Price Mover Tracker.
 Data source: TCGdex (https://api.tcgdex.net/v2) -- free, no API key required.
 
 Ranking methodology (see README.md for the full rationale):
-  - TCGplayer's block in the API is a point-in-time snapshot with no built-in
-    history, so it is used only as a display-only USD price. It is read from
-    the card's BASE printing (see TCGPLAYER_VARIANT_PRIORITY) to match the
-    Cardmarket track the ranking uses.
+  - Everything the report DISPLAYS is Cardmarket, in EUR. Showing a TCGplayer
+    USD price beside a Cardmarket EUR percentage made each row assert
+    something false -- "this $750 card rose 155.8%" when the $750 and the
+    155.8% came from different marketplaces in different currencies. One
+    source, one currency, and the columns reconcile by eye.
+  - TCGplayer's block is still parsed (it is a point-in-time snapshot with no
+    history, so it could never drive the ranking anyway); its price is used
+    only as a tie-breaker when de-duplicating cards that share a Cardmarket
+    product. It is read from the card's BASE printing, see
+    TCGPLAYER_VARIANT_PRIORITY.
   - Cardmarket's avg1 / avg7 / avg30 fields ARE rolling trailing averages
     (in EUR), so they're used as a moving-average crossover, similar to how
     you'd compare short vs long moving averages for a stock:
@@ -375,8 +381,7 @@ def get_gainers_and_losers(n=5):
 
     _add_new_badges(gainers + losers)
 
-    priced = [c for c in rankable if c.get("usd_display_price") is not None]
-    priciest = max(priced, key=lambda c: c["usd_display_price"]) if priced else None
+    priciest = max(rankable, key=lambda c: c["avg7_eur"]) if rankable else None
 
     return {
         "gainers": gainers,
@@ -396,44 +401,8 @@ def _fmt_pct(value):
     return f"{value:+.1f}%" if value is not None else "—"
 
 
-def _fmt_usd(value):
-    return f"${value:,.2f}" if value is not None else "—"
-
-
 def _fmt_eur(value):
     return f"€{value:,.2f}" if value is not None else "—"
-
-
-def _sparkline_svg(card, direction):
-    """A 3-point trend line: 30-day avg -> 7-day avg -> 1-day avg.
-
-    These are three rolling averages, not a price history -- it shows the
-    direction the averages are pointing, which is exactly what the table
-    ranks on. Cards with no avg1 draw the two points they do have.
-    """
-    points = [card["avg30_eur"], card["avg7_eur"]]
-    if card.get("avg1_eur") is not None:
-        points.append(card["avg1_eur"])
-
-    width, height, pad = 78.0, 30.0, 4.0
-    low, high = min(points), max(points)
-    span = (high - low) or 1.0
-    step = width / (len(points) - 1)
-    coords = [
-        (i * step, height - pad - ((value - low) / span) * (height - 2 * pad))
-        for i, value in enumerate(points)
-    ]
-    path = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
-    last_x, last_y = coords[-1]
-
-    return (
-        f'<svg class="spark" viewBox="0 0 {width:.0f} {height:.0f}" width="{width:.0f}" '
-        f'height="{height:.0f}" aria-hidden="true" focusable="false">'
-        f'<polyline points="{path}" fill="none" stroke="var(--{direction}-mark)" '
-        f'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
-        f'<circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="1.9" fill="var(--{direction}-mark)"/>'
-        f"</svg>"
-    )
 
 
 def _thumb_html(card):
@@ -454,11 +423,10 @@ def _row_html(rank, card):
     variant_html = f'<span class="chip">{variant}</span>' if variant else ""
     new_html = '<span class="chip chip-new">NEW</span>' if card.get("is_new") else ""
 
-    price_variant = card.get("usd_price_variant")
-    note = f"{price_variant.replace('-', ' ')} printing" if price_variant else "no TCGplayer listing"
+    word = "up" if direction == "up" else "down"
     tooltip = html.escape(
-        f"{card.get('name')} — 30-day avg €{card['avg30_eur']:.2f} → "
-        f"7-day avg €{card['avg7_eur']:.2f} · price is the {note}"
+        f"{card.get('name')} — was €{card['avg30_eur']:,.2f} a month ago, "
+        f"now €{card['avg7_eur']:,.2f}: {word} {abs(card['pct_change_month']):.1f}%"
     )
 
     return f"""
@@ -473,11 +441,9 @@ def _row_html(rank, card):
               </span>
             </span>
           </td>
-          <td class="c-spark">{_sparkline_svg(card, direction)}</td>
-          <td class="c-num c-price">{_fmt_usd(card.get('usd_display_price'))}</td>
-          <td class="c-num c-change">{_fmt_eur(card.get('change_eur'))}</td>
-          <td class="c-num c-pct"><span class="pill {direction}">{arrow} {card['pct_change_month']:+.1f}%</span></td>
-          <td class="c-num c-24h">{_fmt_pct(card.get('pct_change_24h'))}</td>
+          <td class="c-num c-was">{_fmt_eur(card.get('avg30_eur'))}</td>
+          <td class="c-num c-now">{_fmt_eur(card.get('avg7_eur'))}</td>
+          <td class="c-num c-pct"><span class="pill {direction}">{arrow} {abs(card['pct_change_month']):.1f}%</span></td>
         </tr>"""
 
 
@@ -491,11 +457,9 @@ def _table_html(cards, empty_message):
           <tr>
             <th class="c-rank">#</th>
             <th class="c-card">Card</th>
-            <th class="c-spark">Trend</th>
-            <th class="c-num">Price</th>
+            <th class="c-num">A month ago</th>
+            <th class="c-num">Price now</th>
             <th class="c-num">Change</th>
-            <th class="c-num">Change %</th>
-            <th class="c-num">24h</th>
           </tr>
         </thead>
         <tbody>{rows}</tbody>
@@ -511,7 +475,7 @@ def _aside_html(stats):
         <div class="feature">
           {_thumb_html(priciest)}
           <div class="feature-text">
-            <span class="feature-value">{_fmt_usd(priciest.get('usd_display_price'))}</span>
+            <span class="feature-value">{_fmt_eur(priciest.get('avg7_eur'))}</span>
             <span class="feature-name">{html.escape(priciest.get('set') or '')}</span>
             <span class="feature-sub">#{html.escape(str(priciest.get('local_id') or ''))}
               {html.escape(priciest.get('variant_label') or '')}</span>
@@ -523,13 +487,14 @@ def _aside_html(stats):
     if wildest:
         card = wildest["card"]
         swing_dir = "up" if wildest["swing_pct"] >= 0 else "down"
+        swing_word = "jumped" if swing_dir == "up" else "dropped"
         wildest_block = f"""
         <div class="feature">
           {_thumb_html(card)}
           <div class="feature-text">
-            <span class="feature-value {swing_dir}">{wildest['swing_pct']:+.0f}%</span>
+            <span class="feature-value {swing_dir}">{abs(wildest['swing_pct']):.0f}%</span>
             <span class="feature-name">{html.escape(card.get('set') or '')}</span>
-            <span class="feature-sub">1-day avg vs 7-day avg</span>
+            <span class="feature-sub">{swing_word} in a day</span>
           </div>
         </div>"""
     else:
@@ -542,16 +507,16 @@ def _aside_html(stats):
 
     return f"""
       <aside class="side">
-        <section class="panel">
+        <section class="panel panel-hero">
           <h2>Priciest Pikachu</h2>
           {priciest_block}
-          <p class="panel-note">Highest TCGplayer market price of the {tracked} cards tracked.</p>
+          <p class="panel-note">The most expensive of the {tracked} cards tracked.</p>
         </section>
 
-        <section class="panel">
+        <section class="panel panel-hero">
           <h2>Wildest 24h swing</h2>
           {wildest_block}
-          <p class="panel-note">The sharpest one-day move against the weekly average — a single sale can cause it.</p>
+          <p class="panel-note">The sharpest one-day move — a single sale can cause it.</p>
         </section>
 
         <section class="panel">
@@ -702,8 +667,6 @@ def render_html_report(data):
   .board tbody tr:hover {{ background: var(--row-hover); }}
   .c-num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
   .c-rank {{ width: 30px; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }}
-  .c-spark {{ width: 88px; }}
-  .spark {{ display: block; }}
 
   .c-card {{ min-width: 0; }}
   /* the flex lives on an inner span, not the td -- a flex td drops out of
@@ -720,14 +683,13 @@ def render_html_report(data):
   .chip {{ background: var(--chip); color: var(--ink-2); padding: 0 6px; border-radius: 999px; font-size: 10.5px; font-weight: 600; }}
   .chip-new {{ background: var(--accent); color: var(--accent-ink); font-weight: 800; letter-spacing: 0.03em; }}
 
-  .c-price {{ font-weight: 620; font-size: 15.5px; }}
-  .c-change {{ color: var(--ink-2); font-size: 13.5px; }}
-  tr.up .c-change {{ color: var(--up); }}
-  tr.down .c-change {{ color: var(--down); }}
-  .c-24h {{ color: var(--muted); font-size: 13px; }}
+  /* "A month ago" is deliberately quieter than "Price now" -- the eye should
+     land on today's price, with the old one as context beside it. */
+  .c-was {{ color: var(--muted); font-size: 14px; font-weight: 500; }}
+  .c-now {{ font-weight: 680; font-size: 16.5px; }}
   .pill {{
-    display: inline-block; padding: 4px 10px; border-radius: 6px;
-    font-weight: 680; font-size: 14px; font-variant-numeric: tabular-nums;
+    display: inline-block; padding: 5px 11px; border-radius: 7px;
+    font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums;
   }}
   .pill.up {{ background: var(--up-wash); color: var(--up); }}
   .pill.down {{ background: var(--down-wash); color: var(--down); }}
@@ -739,15 +701,16 @@ def render_html_report(data):
     padding: 13px 14px; box-shadow: var(--shadow);
   }}
   .panel h2 {{ margin: 0 0 10px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }}
-  .feature {{ display: flex; gap: 11px; align-items: center; }}
-  .feature .thumb {{ width: 44px; height: 61px; }}
+  .panel-hero {{ padding: 15px 16px 14px; }}
+  .feature {{ display: flex; gap: 14px; align-items: center; }}
+  .feature .thumb {{ width: 78px; height: 109px; border-radius: 6px; }}
   .feature-text {{ display: flex; flex-direction: column; min-width: 0; }}
-  .feature-value {{ font-size: 20px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }}
+  .feature-value {{ font-size: 30px; font-weight: 720; letter-spacing: -0.03em; line-height: 1.05; font-variant-numeric: tabular-nums; }}
   .feature-value.up {{ color: var(--up); }}
   .feature-value.down {{ color: var(--down); }}
-  .feature-name {{ font-size: 12.5px; font-weight: 600; margin-top: 1px; }}
-  .feature-sub {{ font-size: 11px; color: var(--muted); }}
-  .panel-note {{ margin: 9px 0 0; font-size: 10.5px; line-height: 1.45; color: var(--muted); }}
+  .feature-name {{ font-size: 14px; font-weight: 640; margin-top: 4px; }}
+  .feature-sub {{ font-size: 12px; color: var(--muted); }}
+  .panel-note {{ margin: 10px 0 0; font-size: 10.5px; line-height: 1.45; color: var(--muted); }}
 
   .pulse-bar {{ height: 7px; border-radius: 999px; background: var(--down-mark); overflow: hidden; }}
   .pulse-up {{ display: block; height: 100%; background: var(--up-mark); }}
@@ -765,10 +728,10 @@ def render_html_report(data):
     .main {{ grid-template-columns: 1fr; }}
     .side {{ flex-direction: row; flex-wrap: wrap; }}
     .side .panel {{ flex: 1 1 220px; }}
-    .c-spark, .c-24h, th.c-spark, th.c-num:last-child {{ display: none; }}
+    .side .panel-hero {{ flex: 1 1 260px; }}
   }}
   @media (max-width: 560px) {{
-    .c-change, .board th:nth-child(5) {{ display: none; }}
+    .c-was, .board th:nth-child(3) {{ display: none; }}
     .head h1 {{ font-size: 22px; }}
   }}
 </style>
@@ -778,7 +741,7 @@ def render_html_report(data):
     <header class="head">
       <div>
         <h1><span class="bolt">⚡</span> Pikachu Card Prices</h1>
-        <p>The Pikachu cards moving most on Cardmarket over the past month — biggest risers and biggest fallers, updated weekly.</p>
+        <p>The Pikachu cards that went up and down the most in the last month. All prices in euros, from Cardmarket.</p>
       </div>
       <div class="head-stats">
         <div class="kpi"><span>Biggest gain</span><b class="up">{_fmt_pct(top_gain)}</b></div>
@@ -803,10 +766,10 @@ def render_html_report(data):
     </div>
 
     <footer class="foot">
-      <strong>Change</strong> is Cardmarket's 7-day average against its 30-day average, in EUR — a moving-average
-      crossover, not the price exactly 30 days ago. <strong>Price</strong> is the TCGplayer market price in USD for the
-      card's base printing, shown for scale only. <strong>Trend</strong> plots the 30-, 7- and 1-day averages.
-      Cards averaging under €1.00, or missing Cardmarket averages, are excluded. Data from
+      Every figure is a Cardmarket selling price in euros, so the three columns always agree:
+      <strong>a month ago</strong> is the 30-day average, <strong>price now</strong> is the 7-day average, and
+      <strong>change</strong> is the difference between them. Averages rather than single sales, so one odd listing
+      can't swing a card. Cards averaging under €1.00, or missing Cardmarket averages, are left out. Data from
       <a href="https://tcgdex.dev/">TCGdex</a>.
     </footer>
   </div>

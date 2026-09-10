@@ -10,9 +10,17 @@ API (no API key required). Delivered two ways:
   regenerates the report and publishes it to GitHub Pages.
 
 The published page is a price board in the style of a stock screener: two tabs
-(**Top gainers** / **Top losers**), five rows each, with a thumbnail, a 3-point
-trend line, price, absolute change and percent change per row, plus a sidebar
-of summary stats.
+(**Top gainers** / **Top losers**), five rows each showing what the card cost a
+month ago, what it costs now, and the change between them — plus a sidebar of
+summary stats.
+
+**Every figure on the page is a Cardmarket price in euros.** An earlier version
+put a TCGplayer USD price next to a Cardmarket EUR percentage, which made each
+row claim something untrue: "Pokémon Rumble #7 — $750.00 — +155.8%" read as
+*this $750 card rose 155.8%*, when the $750 and the 155.8% came from different
+marketplaces in different currencies. Cardmarket is the only source here with
+price history, so it supplies every number, and the three columns reconcile by
+eye (€731.03 → €1,869.99 is +155.8%).
 
 ## How the ranking works
 
@@ -84,9 +92,9 @@ TCGdex returns pricing from two marketplaces, and they're used very differently:
   instead, with the card number beneath it and only the *distinguishing*
   part of the name kept as a chip (`Ash's Pikachu` → `Ash's`,
   `Pikachu V-UNION` → `V-UNION`, plain `Pikachu` → nothing).
-- **Trend line**: the small sparkline plots three points — the 30-day, 7-day and
-  1-day averages. It is *not* a price history; it shows which way the three
-  rolling averages are pointing, which is what the table ranks on.
+- **Columns**: `A month ago` is the 30-day average, `Price now` is the 7-day
+  average, `Change` is the difference. Nothing on the page needs a footnote to
+  be believed — the arithmetic is visible in the row.
 
 ### The sidebar stats
 
@@ -96,7 +104,7 @@ exposes only `avg`/`low`/`trend`/`avg1`/`avg7`/`avg30` and TCGplayer only
 "most transactions" cannot be built here without inventing it. The sidebar
 shows what the data genuinely supports instead:
 
-- **Priciest Pikachu** — highest TCGplayer market price among all tracked cards.
+- **Priciest Pikachu** — the highest current Cardmarket price among all tracked cards.
 - **Wildest 24h swing** — largest gap between a card's 1-day and 7-day averages.
   This is the one job `avg1` is actually good for: too noisy to rank a monthly
   trend on, but that same sensitivity makes it a decent "something happened to
@@ -108,9 +116,10 @@ shows what the data genuinely supports instead:
 - `avg7`/`avg30` are **rolling** trailing averages, not "the price exactly 7
   or 30 days ago" — this is an approximation of a monthly move, not an exact
   one.
-- The ranking metric is in **EUR** (Cardmarket), while the displayed price is
-  in **USD** (TCGplayer) — the two aren't on the same currency or the same
-  marketplace, and a card can be popular on one and quiet on the other.
+- Prices are **European** (Cardmarket, in EUR) because that is the only source
+  in this API with price history. US prices on TCGplayer can differ
+  substantially for the same card — the board is not a guide to what something
+  sells for in the States.
 - Cards missing `cardmarket.avg7` or `cardmarket.avg30` are skipped, not
   treated as 0% — the number of skips is logged on every run so it's
   visible rather than silent (a typical run skips ~50 of ~207 Pikachu cards,
@@ -129,7 +138,7 @@ shows what the data genuinely supports instead:
 | File | Purpose |
 |---|---|
 | `pikachu_core.py` | All shared logic: fetching, ranking, HTML rendering. No dependency beyond `requests`. |
-| `test_pikachu_core.py` | 41 unit tests (`unittest` + mocked `requests.get` — no real network calls). |
+| `test_pikachu_core.py` | 43 unit tests (`unittest` + mocked `requests.get` — no real network calls). |
 | `Pikachu_Movers.ipynb` | Manual notebook: styled DataFrame + bar chart. |
 | `generate_report.py` | Automation entry point: fetch → write `docs/index.html`. |
 | `.github/workflows/weekly-report.yml` | Runs `generate_report.py` weekly and on-demand. |
@@ -152,7 +161,7 @@ pip install -r requirements.txt
 python -m unittest test_pikachu_core.py -v
 ```
 
-All 41 tests mock `requests.get` — no network access needed, and none of the
+All 43 tests mock `requests.get` — no network access needed, and none of the
 real API's rate limits are touched.
 
 ## Running the report generator locally

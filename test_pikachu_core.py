@@ -365,12 +365,14 @@ class GainersAndLosersTests(unittest.TestCase):
     def test_stats_report_counts_and_priciest_card(self, mock_get, mock_sleep):
         self._wire(mock_get, [
             ("up", "Pikachu A", 12, 12, 10),
-            ("down", "Pikachu B", 5, 5, 100),   # priciest by avg30 -> marketPrice 100
+            ("down", "Pikachu B", 90, 90, 200),   # priciest: avg7 of 90 beats 12
         ])
         stats = pikachu_core.get_gainers_and_losers(n=5)["stats"]
         self.assertEqual(stats["tracked"], 2)
         self.assertEqual(stats["gainer_count"], 1)
         self.assertEqual(stats["loser_count"], 1)
+        # "Priciest" is now the highest current Cardmarket price (avg7, EUR),
+        # not a TCGplayer USD figure -- the page is single-currency.
         self.assertEqual(stats["priciest"]["id"], "down")
 
     @patch("pikachu_core.time.sleep", return_value=None)
@@ -440,22 +442,35 @@ class RenderHtmlReportTests(unittest.TestCase):
     def test_sidebar_shows_priciest_and_wildest_swing(self):
         report = pikachu_core.render_html_report(self._data())
         self.assertIn("Priciest Pikachu", report)
-        self.assertIn("$4,100.00", report)
+        self.assertIn("€14.20", report)  # priciest fixture's avg7, in EUR
         self.assertIn("Wildest 24h swing", report)
-        self.assertIn("+212%", report)
+        self.assertIn("212%", report)
         self.assertIn("Market pulse", report)
 
-    def test_price_column_is_plain_price_and_set_is_the_headline(self):
+    def test_every_figure_on_the_page_is_in_one_currency(self):
+        # Mixing a USD price with a EUR-derived percentage made the rows read
+        # as "this $750 card rose 155.8%", which was never true -- the two came
+        # from different marketplaces. The page is Cardmarket EUR throughout.
         report = pikachu_core.render_html_report(self._data())
-        self.assertIn(">Price<", report)
-        self.assertNotIn("USD ref", report)
+        self.assertNotIn("$", report)
+        self.assertIn("€", report)
+
+    def test_columns_spell_out_the_before_and_after_prices(self):
+        report = pikachu_core.render_html_report(self._data())
+        self.assertIn("A month ago", report)
+        self.assertIn("Price now", report)
+        self.assertIn("€10.00", report)   # avg30, "a month ago"
+        self.assertIn("€14.20", report)   # avg7, "price now"
+
+    def test_set_is_the_headline(self):
+        report = pikachu_core.render_html_report(self._data())
         self.assertIn('class="card-set">Set A<', report)
         self.assertIn(">Ash&#x27;s<", report)
 
-    def test_sparkline_handles_missing_one_day_average(self):
-        # The loser fixture has avg1_eur=None: two points, not a crash.
+    def test_no_trendline_is_rendered(self):
         report = pikachu_core.render_html_report(self._data())
-        self.assertEqual(report.count("<svg class=\"spark\""), 2)
+        self.assertNotIn("<svg", report)
+        self.assertNotIn("Trend", report)
 
     def test_empty_lists_render_without_crashing(self):
         report = pikachu_core.render_html_report({
