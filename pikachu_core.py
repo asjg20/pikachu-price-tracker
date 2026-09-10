@@ -492,23 +492,6 @@ def get_gainers_and_losers(n=5):
     }
 
 
-def _cardmarket_url(card):
-    """Link to this card's own Cardmarket product page, or None.
-
-    URL shape (game name + bare idProduct as a query param) is Cardmarket's
-    own documented cross-site linking convention -- the same one Scryfall
-    uses to link out to Cardmarket for Magic cards. Cardmarket blocks
-    automated requests outright (403 on every path, including this one), so
-    this could not be verified by fetching it; it's confirmed via that
-    published convention and the idProduct already on hand for de-duplication,
-    not by a live check.
-    """
-    product_id = card.get("cm_product_id")
-    if not product_id:
-        return None
-    return f"https://www.cardmarket.com/en/Pokemon/Products?idProduct={product_id}"
-
-
 def _fmt_pct(value):
     return f"{value:+.1f}%" if value is not None else "—"
 
@@ -578,22 +561,10 @@ def _row_html(rank, card):
     new_html = '<span class="chip chip-new">NEW</span>' if card.get("is_new") else ""
 
     word = "up" if direction == "up" else "down"
-    tooltip_text = (
+    tooltip = html.escape(
         f"{card.get('name')} — was €{card['avg30_eur']:,.2f} a month ago, "
         f"now €{card['avg7_eur']:,.2f}: {word} {abs(card['pct_change_month']):.1f}%"
     )
-
-    cardmarket_url = _cardmarket_url(card)
-    if cardmarket_url:
-        tooltip_text += " — click to check this price on Cardmarket"
-        set_name_html = (
-            f'<a class="set-link" href="{html.escape(cardmarket_url)}" '
-            f'target="_blank" rel="noopener noreferrer">{set_name}'
-            f'<span class="out-icon" aria-hidden="true">↗</span></a>'
-        )
-    else:
-        set_name_html = set_name
-    tooltip = html.escape(tooltip_text)
 
     return f"""
         <tr class="{direction}" title="{tooltip}">
@@ -602,7 +573,7 @@ def _row_html(rank, card):
             <span class="cell">
               {_thumb_html(card)}
               <span class="card-id">
-                <span class="card-set">{set_name_html}</span>
+                <span class="card-set">{set_name}</span>
                 <span class="card-sub">{f'#{local_id}' if local_id else ''} {variant_html} {new_html}</span>
               </span>
             </span>
@@ -632,20 +603,6 @@ def _table_html(cards, empty_message):
       </table>"""
 
 
-def _feature_name_html(card):
-    """A sidebar feature's card name, linked to Cardmarket when possible --
-    same treatment as a table row's set name, see _cardmarket_url."""
-    set_name = html.escape(card.get("set") or "")
-    cardmarket_url = _cardmarket_url(card)
-    if not cardmarket_url:
-        return set_name
-    return (
-        f'<a class="set-link" href="{html.escape(cardmarket_url)}" '
-        f'target="_blank" rel="noopener noreferrer">{set_name}'
-        f'<span class="out-icon" aria-hidden="true">↗</span></a>'
-    )
-
-
 def _aside_html(stats):
     priciest = stats.get("priciest")
     wildest = stats.get("wildest_24h")
@@ -656,7 +613,7 @@ def _aside_html(stats):
           {_thumb_html(priciest)}
           <div class="feature-text">
             <span class="feature-value">{_fmt_eur(priciest.get('avg7_eur'))}</span>
-            <span class="feature-name">{_feature_name_html(priciest)}</span>
+            <span class="feature-name">{html.escape(priciest.get("set") or "")}</span>
             <span class="feature-sub">#{html.escape(str(priciest.get('local_id') or ''))}
               {html.escape(priciest.get('variant_label') or '')}</span>
           </div>
@@ -673,7 +630,7 @@ def _aside_html(stats):
           {_thumb_html(card)}
           <div class="feature-text">
             <span class="feature-value {swing_dir}">{abs(wildest['swing_pct']):.0f}%</span>
-            <span class="feature-name">{_feature_name_html(card)}</span>
+            <span class="feature-name">{html.escape(card.get("set") or "")}</span>
             <span class="feature-sub">{swing_word} in a day</span>
           </div>
         </div>"""
@@ -921,13 +878,6 @@ def render_html_report(data):
   .thumb-label {{ font-size: 11px; line-height: 1.25; }}
   .card-id {{ display: flex; flex-direction: column; min-width: 0; }}
   .card-set {{ font-weight: 620; font-size: 15px; letter-spacing: -0.01em; }}
-  /* A card name that links out to its own Cardmarket page, so any price
-     here is one click from independent verification. Inherits the row's ink
-     rather than looking like a generic blue link -- the underline and arrow
-     are what mark it clickable. */
-  .set-link {{ color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }}
-  .set-link:hover {{ border-bottom-style: solid; }}
-  .out-icon {{ font-size: 0.75em; margin-left: 3px; color: var(--muted); }}
   .card-sub {{ font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 5px; margin-top: 1px; font-variant-numeric: tabular-nums; }}
   .chip {{ background: var(--chip); color: var(--ink-2); padding: 0 6px; border-radius: 999px; font-size: 10.5px; font-weight: 600; }}
   .chip-new {{ background: var(--accent); color: var(--accent-ink); font-weight: 800; letter-spacing: 0.03em; }}
@@ -1023,8 +973,7 @@ def render_html_report(data):
       Every figure is a Cardmarket selling price in euros, so the three columns always agree:
       <strong>a month ago</strong> is the 30-day average, <strong>price now</strong> is the 7-day average, and
       <strong>change</strong> is the difference between them. These are rolling averages, not condition-filtered --
-      a low-volume card's average can still be skewed by a handful of sales. Card names link out to their own
-      Cardmarket page, so any number here is one click from a second opinion. Cards averaging under €1.00, missing
+      a low-volume card's average can still be skewed by a handful of sales. Cards averaging under €1.00, missing
       Cardmarket averages, or individually verified as unreliable are left out. Data from
       <a href="https://tcgdex.dev/">TCGdex</a>.
     </footer>

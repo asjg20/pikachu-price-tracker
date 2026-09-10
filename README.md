@@ -95,14 +95,12 @@ TCGdex returns pricing from two marketplaces, and they're used very differently:
 - **Columns**: `A month ago` is the 30-day average, `Price now` is the 7-day
   average, `Change` is the difference. Nothing on the page needs a footnote to
   be believed — the arithmetic is visible in the row.
-- **Verify-it-yourself links**: every card name (row or sidebar) links out to
-  its own Cardmarket product page, via `?idProduct=<id>` — a documented
-  Cardmarket cross-site linking convention (the same one Scryfall uses for
-  Magic cards), built from the `idProduct` field already present in the
-  pricing response. Cardmarket blocks automated requests outright (403 on
-  every path), so this couldn't be confirmed by fetching it — it's built from
-  that published format, not a live check. Given the data-quality issues
-  below, this exists so no number has to be taken on faith.
+
+  A short-lived earlier version linked each card name out to its own
+  Cardmarket product page, so any number was one click from a second opinion.
+  Removed: Cardmarket blocks the traffic those links generate (403 on every
+  path, confirmed both by curl and by actually clicking one), so the links
+  never resolved for a real visitor either.
 
 ### The sidebar stats
 
@@ -175,7 +173,7 @@ shows what the data genuinely supports instead:
 | File | Purpose |
 |---|---|
 | `pikachu_core.py` | All shared logic: fetching, ranking, HTML rendering. No dependency beyond `requests`. |
-| `test_pikachu_core.py` | 54 unit tests (`unittest` + mocked `requests.get` — no real network calls). |
+| `test_pikachu_core.py` | 50 unit tests (`unittest` + mocked `requests.get` — no real network calls). |
 | `Pikachu_Movers.ipynb` | Manual notebook: styled DataFrame + bar chart. |
 | `generate_report.py` | Automation entry point: fetch → write `docs/index.html`. |
 | `docs/assets/backdrop.jpg` | Page background art (not from TCGdex). Static file, untouched by every regeneration. |
@@ -199,7 +197,7 @@ pip install -r requirements.txt
 python -m unittest test_pikachu_core.py -v
 ```
 
-All 54 tests mock `requests.get` — no network access needed, and none of the
+All 50 tests mock `requests.get` — no network access needed, and none of the
 real API's rate limits are touched.
 
 ## Running the report generator locally
