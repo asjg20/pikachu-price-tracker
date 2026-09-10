@@ -36,6 +36,10 @@
        is close to invisible on a near-white background. */
     --title-grad: linear-gradient(96deg, #c98500 4%, #d2691a 52%, #c2410c 96%);
     --title-shadow: none;
+    /* One size for every piece of card art on the page -- table rows and
+       sidebar features alike. Card aspect ratio is 245:342. */
+    --art-w: 96px;
+    --art-h: 134px;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -78,14 +82,17 @@
     content: ""; position: fixed; inset: -40px; z-index: -2; pointer-events: none;
   }
   body::before {
-    background: url("https://assets.tcgdex.net/en/xy/g1/RC29/high.png") center / cover no-repeat;
+    /* Framed near the top of the card: the artwork lives in the upper half,
+       while the lower half is attack text that reads as stray words behind
+       the table. */
+    background: url("https://assets.tcgdex.net/en/xy/g1/RC29/high.png") center 20% / cover no-repeat;
     opacity: var(--backdrop-opacity);
     filter: blur(3px) saturate(1.15);
   }
   body::after { background: var(--backdrop-veil); z-index: -1; }
   .wrap {
     max-width: 1240px; min-height: 100%; margin: 0 auto;
-    padding: 26px 24px 20px; display: flex; flex-direction: column; gap: 16px;
+    padding: 18px 22px 14px; display: flex; flex-direction: column; gap: 12px;
   }
 
   /* ---------- header ---------- */
@@ -104,9 +111,13 @@
   /* The description runs the full width of the title block rather than
      wrapping early in a narrow column. */
   .head p { margin: 6px 0 0; color: var(--ink-2); font-size: 14.5px; max-width: none; }
-  .bolt {
-    -webkit-text-fill-color: initial; color: var(--accent);
-    filter: drop-shadow(0 2px 6px rgba(246,201,69,0.55));
+  /* Sized in em so the face tracks the responsive title, and nudged onto the
+     text baseline. It sits inside the gradient-clipped h1, so the fill has to
+     be reset or the artwork inherits transparent text fill. */
+  .face {
+    height: 1.05em; width: 1.05em; vertical-align: -0.17em;
+    -webkit-text-fill-color: initial;
+    filter: drop-shadow(0 2px 6px rgba(246,201,69,0.45));
   }
   .head-stats { display: flex; gap: 8px; align-items: stretch; }
   .kpi {
@@ -156,8 +167,8 @@
     border-bottom: 1px solid var(--hairline); white-space: nowrap;
     height: 34px;
   }
-  .board td { padding: 10px 16px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }
-  .board tbody tr { height: 76px; }
+  .board td { padding: 7px 16px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }
+  .board tbody tr { height: calc(var(--art-h) + 14px); }
   .board tbody tr:last-child td { border-bottom: none; }
   .board tbody tr:hover { background: var(--row-hover); }
   .c-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -168,10 +179,17 @@
      table layout and the row borders stop lining up */
   .c-card .cell { display: flex; align-items: center; gap: 12px; }
   .thumb {
-    width: 50px; height: 70px; object-fit: contain; border-radius: 5px;
-    background: var(--chip); flex: none;
+    width: var(--art-w); height: var(--art-h); object-fit: contain;
+    border-radius: 6px; background: var(--chip); flex: none;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.22);
   }
-  .thumb-empty { display: grid; place-items: center; font-size: 18px; opacity: .5; }
+  .thumb-empty {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 5px; box-shadow: none; border: 1px dashed var(--hairline);
+    color: var(--muted); text-align: center;
+  }
+  .thumb-bolt { font-size: 24px; opacity: .5; }
+  .thumb-label { font-size: 11px; line-height: 1.25; }
   .card-id { display: flex; flex-direction: column; min-width: 0; }
   .card-set { font-weight: 620; font-size: 15px; letter-spacing: -0.01em; }
   .card-sub { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 5px; margin-top: 1px; font-variant-numeric: tabular-nums; }
@@ -199,10 +217,7 @@
   .panel-hero { padding: 16px 18px 15px; }
   .panel-hero h2 { font-size: 11.5px; margin-bottom: 12px; }
   .feature { display: flex; gap: 16px; align-items: center; }
-  .feature .thumb {
-    width: 112px; height: 156px; border-radius: 7px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.28);
-  }
+  .feature .thumb { border-radius: 7px; box-shadow: 0 2px 6px rgba(0,0,0,0.28); }
   .feature-text { display: flex; flex-direction: column; min-width: 0; }
   .feature-value {
     font-family: Fredoka, "Trebuchet MS", system-ui, sans-serif;
@@ -243,13 +258,13 @@
   <div class="wrap">
     <header class="head">
       <div>
-        <h1><span class="bolt">⚡</span> Pikachu Card Prices</h1>
+        <h1><svg class="face" viewBox="0 0 100 100" role="img" aria-label="Pikachu"><defs><clipPath id="ear-l"><ellipse cx="31" cy="26" rx="8.5" ry="24" transform="rotate(-30 31 26)"/></clipPath><clipPath id="ear-r"><ellipse cx="69" cy="26" rx="8.5" ry="24" transform="rotate(30 69 26)"/></clipPath></defs><g clip-path="url(#ear-l)"><rect x="0" y="0" width="100" height="100" fill="#F7D02C"/><rect x="0" y="0" width="100" height="15" fill="#3B3B3B"/></g><g clip-path="url(#ear-r)"><rect x="0" y="0" width="100" height="100" fill="#F7D02C"/><rect x="0" y="0" width="100" height="15" fill="#3B3B3B"/></g><ellipse cx="50" cy="62" rx="31" ry="28" fill="#F7D02C"/><circle cx="24" cy="70" r="7.5" fill="#E3350D"/><circle cx="76" cy="70" r="7.5" fill="#E3350D"/><ellipse cx="39" cy="55" rx="5.6" ry="6" fill="#2B2B2B"/><ellipse cx="61" cy="55" rx="5.6" ry="6" fill="#2B2B2B"/><circle cx="40.8" cy="52.6" r="1.9" fill="#fff"/><circle cx="62.8" cy="52.6" r="1.9" fill="#fff"/><path d="M46 66 Q50 70 54 66" stroke="#2B2B2B" stroke-width="2.6" fill="none" stroke-linecap="round"/></svg> Pikachu Card Prices</h1>
         <p>The Pikachu cards that went up and down the most in the last month. All prices in euros, from Cardmarket.</p>
       </div>
       <div class="head-stats">
         <div class="kpi"><span>Biggest gain</span><b class="up">+155.8%</b></div>
         <div class="kpi"><span>Biggest drop</span><b class="down">-62.1%</b></div>
-        <div class="kpi stamp"><span>Last updated</span><b>10 Sep 2026, 05:20 UTC</b></div>
+        <div class="kpi stamp"><span>Last updated</span><b>10 Sep 2026, 05:32 UTC</b></div>
       </div>
     </header>
 
@@ -307,7 +322,7 @@
           <td class="c-rank">3</td>
           <td class="c-card">
             <span class="cell">
-              <span class="thumb thumb-empty" aria-hidden="true">⚡</span>
+              <span class="thumb thumb-empty"><span class="thumb-bolt" aria-hidden="true">⚡</span><span class="thumb-label">No art<br>on file</span></span>
               <span class="card-id">
                 <span class="card-set">SWSH Black Star Promos</span>
                 <span class="card-sub">#SWSH074 <span class="chip">Special Delivery</span> </span>
@@ -337,7 +352,7 @@
           <td class="c-rank">5</td>
           <td class="c-card">
             <span class="cell">
-              <span class="thumb thumb-empty" aria-hidden="true">⚡</span>
+              <span class="thumb thumb-empty"><span class="thumb-bolt" aria-hidden="true">⚡</span><span class="thumb-label">No art<br>on file</span></span>
               <span class="card-id">
                 <span class="card-set">Shining Legends</span>
                 <span class="card-sub">#28  </span>

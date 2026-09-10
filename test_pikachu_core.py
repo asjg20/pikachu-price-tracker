@@ -468,9 +468,28 @@ class RenderHtmlReportTests(unittest.TestCase):
         self.assertIn(">Ash&#x27;s<", report)
 
     def test_no_trendline_is_rendered(self):
+        # The title's Pikachu face is an inline SVG, so this checks for the
+        # sparkline specifically rather than banning SVG outright.
         report = pikachu_core.render_html_report(self._data())
-        self.assertNotIn("<svg", report)
+        self.assertNotIn("polyline", report)
+        self.assertNotIn("class=\"spark\"", report)
         self.assertNotIn("Trend", report)
+
+    def test_title_shows_a_pikachu_face_not_a_bolt(self):
+        report = pikachu_core.render_html_report(self._data())
+        self.assertIn('class="face"', report)
+        self.assertIn('aria-label="Pikachu"', report)
+        heading = report.split("<h1>")[1].split("</h1>")[0]
+        self.assertNotIn("⚡", heading)  # the bolt survives only as a "no art" placeholder
+
+    def test_row_and_sidebar_art_share_one_size(self):
+        # "Same size as the sidebar" is enforced by both reading --art-w/h,
+        # so the two can't drift apart in a later edit.
+        report = pikachu_core.render_html_report(self._data())
+        self.assertIn("width: var(--art-w); height: var(--art-h);", report)
+        # the sidebar rule must not re-declare its own width/height
+        aside_rule = report.split(".feature .thumb {")[1].split("}")[0]
+        self.assertNotIn("width:", aside_rule)
 
     def test_empty_lists_render_without_crashing(self):
         report = pikachu_core.render_html_report({

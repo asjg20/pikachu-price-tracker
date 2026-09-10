@@ -446,6 +446,41 @@ def _fmt_pct(value):
     return f"{value:+.1f}%" if value is not None else "—"
 
 
+def _pikachu_face_svg():
+    """Inline Pikachu face for the title.
+
+    Drawn rather than pulled from an emoji font -- Unicode has no Pikachu, and
+    an image would need a network round trip just to render the heading. Each
+    ear is a rotated ellipse used as a clip, with a black band filled across
+    its top to make the tip, which keeps the tips following the ear angle.
+    """
+    return (
+        '<svg class="face" viewBox="0 0 100 100" role="img" aria-label="Pikachu">'
+        "<defs>"
+        '<clipPath id="ear-l"><ellipse cx="31" cy="26" rx="8.5" ry="24" '
+        'transform="rotate(-30 31 26)"/></clipPath>'
+        '<clipPath id="ear-r"><ellipse cx="69" cy="26" rx="8.5" ry="24" '
+        'transform="rotate(30 69 26)"/></clipPath>'
+        "</defs>"
+        '<g clip-path="url(#ear-l)">'
+        '<rect x="0" y="0" width="100" height="100" fill="#F7D02C"/>'
+        '<rect x="0" y="0" width="100" height="15" fill="#3B3B3B"/></g>'
+        '<g clip-path="url(#ear-r)">'
+        '<rect x="0" y="0" width="100" height="100" fill="#F7D02C"/>'
+        '<rect x="0" y="0" width="100" height="15" fill="#3B3B3B"/></g>'
+        '<ellipse cx="50" cy="62" rx="31" ry="28" fill="#F7D02C"/>'
+        '<circle cx="24" cy="70" r="7.5" fill="#E3350D"/>'
+        '<circle cx="76" cy="70" r="7.5" fill="#E3350D"/>'
+        '<ellipse cx="39" cy="55" rx="5.6" ry="6" fill="#2B2B2B"/>'
+        '<ellipse cx="61" cy="55" rx="5.6" ry="6" fill="#2B2B2B"/>'
+        '<circle cx="40.8" cy="52.6" r="1.9" fill="#fff"/>'
+        '<circle cx="62.8" cy="52.6" r="1.9" fill="#fff"/>'
+        '<path d="M46 66 Q50 70 54 66" stroke="#2B2B2B" stroke-width="2.6" '
+        'fill="none" stroke-linecap="round"/>'
+        "</svg>"
+    )
+
+
 def _fmt_eur(value):
     return f"€{value:,.2f}" if value is not None else "—"
 
@@ -455,7 +490,14 @@ def _thumb_html(card):
     if image_url:
         alt = html.escape(f"{card.get('name') or 'Pikachu'} — {card.get('set') or ''}")
         return f'<img class="thumb" src="{html.escape(image_url)}" loading="lazy" alt="{alt}">'
-    return '<span class="thumb thumb-empty" aria-hidden="true">⚡</span>'
+    # TCGdex has no artwork on file for some promos. At this size a bare glyph
+    # reads as a broken image, so say what happened.
+    return (
+        '<span class="thumb thumb-empty">'
+        '<span class="thumb-bolt" aria-hidden="true">⚡</span>'
+        '<span class="thumb-label">No art<br>on file</span>'
+        "</span>"
+    )
 
 
 def _row_html(rank, card):
@@ -633,6 +675,10 @@ def render_html_report(data):
        is close to invisible on a near-white background. */
     --title-grad: linear-gradient(96deg, #c98500 4%, #d2691a 52%, #c2410c 96%);
     --title-shadow: none;
+    /* One size for every piece of card art on the page -- table rows and
+       sidebar features alike. Card aspect ratio is 245:342. */
+    --art-w: 96px;
+    --art-h: 134px;
   }}
   @media (prefers-color-scheme: dark) {{
     :root:not([data-theme="light"]) {{
@@ -675,14 +721,17 @@ def render_html_report(data):
     content: ""; position: fixed; inset: -40px; z-index: -2; pointer-events: none;
   }}
   body::before {{
-    background: url("{BACKDROP_IMAGE_URL}") center / cover no-repeat;
+    /* Framed near the top of the card: the artwork lives in the upper half,
+       while the lower half is attack text that reads as stray words behind
+       the table. */
+    background: url("{BACKDROP_IMAGE_URL}") center 20% / cover no-repeat;
     opacity: var(--backdrop-opacity);
     filter: blur(3px) saturate(1.15);
   }}
   body::after {{ background: var(--backdrop-veil); z-index: -1; }}
   .wrap {{
     max-width: 1240px; min-height: 100%; margin: 0 auto;
-    padding: 26px 24px 20px; display: flex; flex-direction: column; gap: 16px;
+    padding: 18px 22px 14px; display: flex; flex-direction: column; gap: 12px;
   }}
 
   /* ---------- header ---------- */
@@ -701,9 +750,13 @@ def render_html_report(data):
   /* The description runs the full width of the title block rather than
      wrapping early in a narrow column. */
   .head p {{ margin: 6px 0 0; color: var(--ink-2); font-size: 14.5px; max-width: none; }}
-  .bolt {{
-    -webkit-text-fill-color: initial; color: var(--accent);
-    filter: drop-shadow(0 2px 6px rgba(246,201,69,0.55));
+  /* Sized in em so the face tracks the responsive title, and nudged onto the
+     text baseline. It sits inside the gradient-clipped h1, so the fill has to
+     be reset or the artwork inherits transparent text fill. */
+  .face {{
+    height: 1.05em; width: 1.05em; vertical-align: -0.17em;
+    -webkit-text-fill-color: initial;
+    filter: drop-shadow(0 2px 6px rgba(246,201,69,0.45));
   }}
   .head-stats {{ display: flex; gap: 8px; align-items: stretch; }}
   .kpi {{
@@ -753,8 +806,8 @@ def render_html_report(data):
     border-bottom: 1px solid var(--hairline); white-space: nowrap;
     height: 34px;
   }}
-  .board td {{ padding: 10px 16px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }}
-  .board tbody tr {{ height: 76px; }}
+  .board td {{ padding: 7px 16px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }}
+  .board tbody tr {{ height: calc(var(--art-h) + 14px); }}
   .board tbody tr:last-child td {{ border-bottom: none; }}
   .board tbody tr:hover {{ background: var(--row-hover); }}
   .c-num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
@@ -765,10 +818,17 @@ def render_html_report(data):
      table layout and the row borders stop lining up */
   .c-card .cell {{ display: flex; align-items: center; gap: 12px; }}
   .thumb {{
-    width: 50px; height: 70px; object-fit: contain; border-radius: 5px;
-    background: var(--chip); flex: none;
+    width: var(--art-w); height: var(--art-h); object-fit: contain;
+    border-radius: 6px; background: var(--chip); flex: none;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.22);
   }}
-  .thumb-empty {{ display: grid; place-items: center; font-size: 18px; opacity: .5; }}
+  .thumb-empty {{
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 5px; box-shadow: none; border: 1px dashed var(--hairline);
+    color: var(--muted); text-align: center;
+  }}
+  .thumb-bolt {{ font-size: 24px; opacity: .5; }}
+  .thumb-label {{ font-size: 11px; line-height: 1.25; }}
   .card-id {{ display: flex; flex-direction: column; min-width: 0; }}
   .card-set {{ font-weight: 620; font-size: 15px; letter-spacing: -0.01em; }}
   .card-sub {{ font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 5px; margin-top: 1px; font-variant-numeric: tabular-nums; }}
@@ -796,10 +856,7 @@ def render_html_report(data):
   .panel-hero {{ padding: 16px 18px 15px; }}
   .panel-hero h2 {{ font-size: 11.5px; margin-bottom: 12px; }}
   .feature {{ display: flex; gap: 16px; align-items: center; }}
-  .feature .thumb {{
-    width: 112px; height: 156px; border-radius: 7px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.28);
-  }}
+  .feature .thumb {{ border-radius: 7px; box-shadow: 0 2px 6px rgba(0,0,0,0.28); }}
   .feature-text {{ display: flex; flex-direction: column; min-width: 0; }}
   .feature-value {{
     font-family: Fredoka, "Trebuchet MS", system-ui, sans-serif;
@@ -840,7 +897,7 @@ def render_html_report(data):
   <div class="wrap">
     <header class="head">
       <div>
-        <h1><span class="bolt">⚡</span> Pikachu Card Prices</h1>
+        <h1>{_pikachu_face_svg()} Pikachu Card Prices</h1>
         <p>The Pikachu cards that went up and down the most in the last month. All prices in euros, from Cardmarket.</p>
       </div>
       <div class="head-stats">
